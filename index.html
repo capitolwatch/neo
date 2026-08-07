@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>NEO</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- Draggable strip so the frameless window can be moved -->
+  <div id="dragstrip"></div>
+
+  <!-- ======================= BOOKSHELF ======================= -->
+  <div id="bookshelf-view">
+    <header id="shelf-header">
+      <h1>NEO</h1>
+      <div class="shelf-header-right">
+        <span id="author-chip" title="Click to change your author name"></span>
+        <button id="import-btn" title="Import .docx, .txt, or .md manuscripts">&#8681; Import</button>
+        <button id="add-shelf-btn" title="Add a shelf">+ Shelf</button>
+      </div>
+    </header>
+    <div id="shelves"></div>
+  </div>
+
+  <!-- ======================= FIRST RUN ======================= -->
+  <div id="firstrun" class="modal-backdrop" hidden>
+    <div class="modal">
+      <div id="fr-step1">
+        <h2>Welcome to NEO</h2>
+        <p>NEO knows you're writing books. A few quick questions and it will never ask anything again.</p>
+        <label>Your name <span class="soft">(appears as the author on every document — leave blank for “Anonymous”)</span>
+          <input id="fr-name" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <label>Pen name <span class="soft">(optional — used on title pages if set)</span>
+          <input id="fr-pen" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="fr-style">
+          <p>Are you a pantser or a plotter?</p>
+          <div class="fr-choices">
+            <button class="fr-choice" data-style="pantser">
+              <strong>Pantser</strong>
+              <span>I write by the seat of my pants. New books open on a blank page.</span>
+            </button>
+            <button class="fr-choice" data-style="plotter">
+              <strong>Plotter</strong>
+              <span>I outline first. New books open in the Outline tab.</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div id="fr-step2" hidden>
+        <h2>How should the page look?</h2>
+        <p>Pick a typeface and a drop-cap style. The sample below shows exactly what you'll get. (Changeable anytime in the Format menu.)</p>
+        <div id="fr-sample">
+          <p id="fr-sample-text">It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness, it was the epoch of belief…</p>
+        </div>
+        <p style="margin-bottom:6px">Body typeface</p>
+        <div id="fr-bodyfonts" class="fr-fontrow"></div>
+        <p style="margin-bottom:6px">Drop cap</p>
+        <div id="fr-dropcaps" class="fr-fontrow"></div>
+        <div style="text-align:right;margin-top:20px">
+          <button id="fr-done" style="background:var(--accent);border:none;border-radius:6px;padding:8px 22px;color:#191919">Start writing</button>
+        </div>
+      </div>
+      <p class="soft">You can change any of this later. That's it for questions — promise.</p>
+    </div>
+  </div>
+
+  <!-- ======================= EDITOR ======================= -->
+  <div id="editor-view" hidden>
+
+    <!-- Left hover zone: chapter navigation -->
+    <div id="nav-hotzone"></div>
+    <nav id="nav-pane">
+      <div id="nav-list"></div>
+      <button id="nav-add" title="Add a chapter at the end">+ Chapter</button>
+    </nav>
+
+    <!-- Right hover zone: notes & comments -->
+    <div id="side-hotzone"></div>
+    <aside id="side-pane">
+      <div id="side-head">
+        <span>Notes &amp; Comments</span>
+        <button id="side-pin" title="Keep this pane open">&#9737;</button>
+      </div>
+      <div id="sticky-list"></div>
+    </aside>
+
+    <!-- The manuscript -->
+    <main id="paper-scroll">
+      <div id="paper">
+        <div id="title-page" class="sheet">
+          <div id="tp-title" contenteditable="true" spellcheck="false" data-ph="Untitled"></div>
+          <div id="tp-subtitle" contenteditable="true" spellcheck="false" data-ph="Subtitle (optional)"></div>
+          <div id="tp-author"></div>
+        </div>
+        <div id="chapters"></div>
+      </div>
+      <!-- Notes / Outline / Darlings live on the same paper, swapped in -->
+      <div id="aux-paper" hidden>
+        <h2 id="aux-title"></h2>
+        <div id="aux-editor" contenteditable="true" spellcheck="false"></div>
+        <div id="outline-list" hidden></div>
+        <div id="darlings-list" hidden></div>
+      </div>
+    </main>
+
+    <!-- Bottom bar: tabs + counters -->
+    <footer id="bottombar">
+      <button id="back-to-shelf" title="Back to your bookshelf">&#8676; Shelf</button>
+      <div id="tabs">
+        <div class="tab active" data-tab="manuscript">Manuscript</div>
+        <div class="tab" data-tab="notes">Notes</div>
+        <div class="tab" data-tab="outline">Outline</div>
+        <div class="tab darlings" data-tab="darlings" title="Drag any selection here. It's saved, not gone.">Darlings</div>
+      </div>
+      <div id="counters">
+        <button id="silo-btn" title="The Silo — a fullscreen you must write your way out of (⌘⇧S)">&#9678; silo</button>
+        <span id="goal-counter" title="Today's words — click for goals, sprints, and your progress chart"></span>
+        <span id="pos-counter"></span>
+        <span id="word-counter" title="Click to cycle book / chapter word count"></span>
+      </div>
+    </footer>
+
+    <!-- Find & replace -->
+    <div id="searchbar" hidden>
+      <input id="search-input" placeholder="Find" spellcheck="false" />
+      <span id="search-count"></span>
+      <button id="search-prev" title="Previous (⇧Enter)">&#8593;</button>
+      <button id="search-next" title="Next (Enter)">&#8595;</button>
+      <input id="replace-input" placeholder="Replace with" spellcheck="false" />
+      <button id="replace-one">Replace</button>
+      <button id="replace-all">All</button>
+      <button id="search-close" title="Close (Esc)">&#10005;</button>
+    </div>
+
+    <!-- Ghost hint, shown once per session -->
+    <div id="hint" hidden></div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
