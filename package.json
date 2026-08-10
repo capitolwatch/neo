@@ -1,7 +1,7 @@
 {
   "name": "neo",
   "productName": "NEO",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A word processor for authors. Distraction-free by default.",
   "main": "main.js",
   "scripts": {
@@ -13,9 +13,22 @@
   "build": {
     "appId": "com.hughhowey.neo",
     "productName": "NEO",
+    "publish": {
+      "provider": "github",
+      "owner": "hughhowey",
+      "repo": "neo"
+    },
     "mac": {
       "category": "public.app-category.productivity",
-      "target": "dmg"
+      "target": [
+        { "target": "dmg", "arch": ["universal"] },
+        { "target": "zip", "arch": ["universal"] }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "win": {
       "target": "nsis"
@@ -32,7 +45,8 @@
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "jszip": "^3.10.1"
+    "jszip": "^3.10.1",
+    "electron-updater": "^6.3.9"
   },
   "allowScripts": {
     "electron@33.4.11": true

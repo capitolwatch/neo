@@ -551,6 +551,17 @@ function buildMenu() {
             { label: 'Sci-Fi', click: () => sendToWindow({ type: 'dropCap', value: 'scifi' }) }
           ]
         },
+        {
+          label: 'Page',
+          submenu: [
+            { label: 'Paper', click: () => sendToWindow({ type: 'pageTheme', value: 'paper' }) },
+            { label: 'Night', click: () => sendToWindow({ type: 'pageTheme', value: 'night' }) }
+          ]
+        },
+        { type: 'separator' },
+        { label: 'Larger Text', accelerator: 'CmdOrCtrl+=', click: () => sendToWindow({ type: 'fontSize', value: 1 }) },
+        { label: 'Smaller Text', accelerator: 'CmdOrCtrl+-', click: () => sendToWindow({ type: 'fontSize', value: -1 }) },
+        { label: 'Reset Text Size', accelerator: 'CmdOrCtrl+0', click: () => sendToWindow({ type: 'fontSize', value: 0 }) },
         { type: 'separator' },
         {
           label: 'Typewriter Scrolling',
@@ -605,11 +616,27 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
+// Auto-update from GitHub releases. Deliberately defensive: any failure is
+// logged and swallowed, so an unsigned build or offline machine never notices.
+// (macOS auto-update only works once the app is code-signed.)
+function checkForUpdates() {
+  if (!app.isPackaged) return;
+  try {
+    const { autoUpdater } = require('electron-updater');
+    autoUpdater.logger = null;
+    autoUpdater.on('error', (err) => logError('updater', err));
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => logError('updater', err));
+  } catch (err) {
+    logError('updater', err);
+  }
+}
+
 app.whenReady().then(() => {
   ensureLibrary();
   buildMenu();
   createWindow();
   dailyBackup();
+  checkForUpdates();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

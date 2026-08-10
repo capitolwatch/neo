@@ -43,7 +43,7 @@ When it finishes, look in the `dist/` folder for `NEO-0.1.0.dmg` (or similar). T
 2. Click **Choose a tag**, type `v0.1.0`, click "Create new tag".
 3. Title: `NEO 0.1.0 — first flight`.
 4. Write a few lines about what it is (or paste from the README).
-5. Drag the `.dmg` from `dist/` into the attachments box.
+5. Drag the installers from `dist/` into the attachments box — **and for auto-update to work, also attach the extra files electron-builder made**: `latest-mac.yml` (and `latest.yml` for Windows), the `.zip`, and the `.blockmap` files. Installed copies of NEO check these to discover new versions and update themselves.
 6. Click **Publish release**.
 
 The release page URL is what you share. Anyone can download the .dmg from there — no ads, no middlemen.

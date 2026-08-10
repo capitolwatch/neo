@@ -96,6 +96,14 @@ function cleanChapterEl(id) {
 }
 const chapterText = (id) => cleanChapterEl(id).innerText;
 
+// Word counts are cached per chapter and only recomputed for the chapter
+// being edited — so a 200k-word epic types as fast as a short story.
+let wordCache = {};
+function chapterWords(chId) {
+  if (wordCache[chId] == null) wordCache[chId] = countWords(chapterText(chId));
+  return wordCache[chId];
+}
+
 /* ================================================================== */
 /*  BOOKSHELF                                                          */
 /* ================================================================== */
@@ -437,6 +445,7 @@ async function openBook(bookId) {
   book = await window.neo.readBookMeta(bookId);
   if (!book) return;
   currentChapterId = null; // never carry a chapter reference across books
+  undoStack = [];
   chapterHTML = {};
   for (const chId of book.chapterOrder) {
     chapterHTML[chId] = await window.neo.readChapter(bookId, chId);
@@ -487,14 +496,42 @@ async function openBook(bookId) {
 function renderChapters() {
   const wrap = $('#chapters');
   wrap.innerHTML = '';
+  wordCache = {};
+  book.chapterTitles = book.chapterTitles || {};
   book.chapterOrder.forEach((chId, i) => {
     const sec = document.createElement('section');
     sec.className = 'chapter sheet';
     sec.dataset.id = chId;
     const head = document.createElement('div');
     head.className = 'chapter-head';
-    head.textContent = 'Chapter ' + (i + 1);
-    head.title = 'Right-click for chapter options';
+    head.title = 'Right-click for chapter options · click after the number to add a title';
+    const num = document.createElement('span');
+    num.className = 'ch-num';
+    num.textContent = 'Chapter ' + (i + 1);
+    const sep = document.createElement('span');
+    sep.className = 'ch-sep';
+    sep.textContent = '—';
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'ch-title';
+    titleSpan.contentEditable = 'true';
+    titleSpan.spellcheck = false;
+    titleSpan.textContent = book.chapterTitles[chId] || '';
+    if (titleSpan.textContent) head.classList.add('has-title');
+    titleSpan.addEventListener('input', () => {
+      head.classList.toggle('has-title', titleSpan.textContent.trim() !== '');
+    });
+    titleSpan.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); titleSpan.blur(); }
+      e.stopPropagation();
+    });
+    titleSpan.addEventListener('blur', () => {
+      book.chapterTitles[chId] = titleSpan.textContent.trim();
+      scheduleMetaSave();
+      renderNav();
+    });
+    head.appendChild(num);
+    head.appendChild(sep);
+    head.appendChild(titleSpan);
     head.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       chapterMenu(chId, i);
@@ -513,6 +550,7 @@ function renderChapters() {
 }
 
 async function deleteChapterToDarlings(chId) {
+  snapshotStructure('chapter delete');
   const index = book.chapterOrder.indexOf(chId);
   const text = chapterText(chId).trim();
   if (text) {
@@ -529,7 +567,7 @@ async function deleteChapterToDarlings(chId) {
   }
   if (currentChapterId === chId) currentChapterId = null;
   await deleteChapterQuiet(chId);
-  if (text) toast('Chapter removed — its words are safe in Darlings');
+  if (text) toast('Chapter removed — its words are in Darlings, or ⌘Z to undo');
 }
 
 async function chapterMenu(chId, index) {
@@ -550,9 +588,26 @@ function wireChapterBody(body, chId) {
   body.addEventListener('focus', () => { currentChapterId = chId; updateCounters(); highlightNav(); });
   body.addEventListener('input', () => {
     chapterHTML[chId] = body.innerHTML;
+    wordCache[chId] = null;
     scheduleChapterSave(chId);
     updateCounters();
     scheduleNavRefresh();
+  });
+  // paste arrives as clean prose: paragraphs, bold, italic — nothing else.
+  // Word/web formatting (fonts, colors, spans) never touches the manuscript.
+  body.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const html = e.clipboardData.getData('text/html');
+    const text = e.clipboardData.getData('text/plain');
+    if (html) {
+      document.execCommand('insertHTML', false, cleanPasteHtml(html));
+    } else if (text) {
+      const parts = text.replace(/\r/g, '').split(/\n+/).filter((p) => p.trim());
+      parts.forEach((p, i) => {
+        if (i > 0) document.execCommand('insertParagraph');
+        document.execCommand('insertText', false, p.trim());
+      });
+    }
   });
   body.addEventListener('keydown', (e) => {
     if (handleEnter(e, body, chId)) return;
@@ -632,9 +687,31 @@ function handleEnter(e, body, chId) {
 
 function syncChapter(body, chId) {
   chapterHTML[chId] = body.innerHTML;
+  wordCache[chId] = null;
   scheduleChapterSave(chId);
   updateCounters();
   scheduleNavRefresh();
+}
+
+// Reduce pasted HTML to what a manuscript is made of: paragraphs, bold, italic.
+function cleanPasteHtml(html) {
+  const holder = document.createElement('div');
+  holder.innerHTML = html;
+  holder.querySelectorAll('script,style,meta,link,img,table').forEach((n) => n.remove());
+  let blocks = [...holder.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6')];
+  if (!blocks.length) blocks = [holder]; // inline-only clipboard
+  const out = blocks.map((b) => {
+    const inner = paraRuns(b.innerHTML).map((r) => {
+      let t = escHtml(r.text);
+      if (r.i) t = '<i>' + t + '</i>';
+      if (r.b) t = '<b>' + t + '</b>';
+      return t;
+    }).join('');
+    return inner.trim() ? '<p>' + inner + '</p>' : '';
+  }).filter(Boolean);
+  // single block pastes inline (no forced new paragraph)
+  if (out.length === 1) return out[0].slice(3, -4);
+  return out.join('');
 }
 
 // Em dash, ellipsis, smart quotes — without ever leaving the keyboard.
@@ -706,6 +783,10 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     if (currentTab === 'manuscript') insertPlaceholder();
   }
+  if (cmd && e.shiftKey && e.code === 'KeyD') {
+    e.preventDefault();
+    if (currentTab === 'manuscript') darlingFromKeyboard();
+  }
   if (e.key === 'Escape') {
     if (!$('#searchbar').hidden) closeSearch();
     else if (siloActive) exitSiloAttempt();
@@ -741,6 +822,7 @@ function newChapter() {
 async function deleteChapterQuiet(chId) {
   book.chapterOrder = book.chapterOrder.filter((c) => c !== chId);
   delete chapterHTML[chId];
+  delete wordCache[chId];
   if (book.sectionNotes) delete book.sectionNotes[chId];
   if (book.chapterNotes) delete book.chapterNotes[chId];
   stickies = stickies.filter((s) => s.chapterId !== chId);
@@ -873,13 +955,28 @@ function renderNav() {
   list.innerHTML = '';
   book.chapterNotes = book.chapterNotes || {};
   book.chapterOrder.forEach((chId, i) => {
-    const words = countWords(chapterText(chId));
+    const words = chapterWords(chId);
     const flagged = !!document.querySelector(`.chapter[data-id="${chId}"] .ph-mark`);
+    const chTitle = (book.chapterTitles || {})[chId];
     const item = document.createElement('div');
     item.className = 'nav-item' + (chId === currentChapterId ? ' current' : '');
     item.dataset.id = chId;
-    item.innerHTML = `<div class="n-row"><span>Chapter ${i + 1}</span>
+    item.innerHTML = `<div class="n-row" title="Drag to reorder chapters"><span class="n-label"></span>
       <span style="display:flex;align-items:center"><span class="n-words">${words.toLocaleString()}</span>${flagged ? '<span class="n-flag" title="Unresolved placeholder"></span>' : ''}</span></div>`;
+    item.querySelector('.n-label').textContent = chTitle ? `${i + 1} · ${chTitle}` : `Chapter ${i + 1}`;
+
+    // the row is the drag handle, so the note below stays freely editable
+    const rowEl = item.querySelector('.n-row');
+    rowEl.draggable = true;
+    rowEl.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('application/x-neo-chapter', chId);
+      item.classList.add('dragging');
+    });
+    rowEl.addEventListener('dragend', () => {
+      item.classList.remove('dragging');
+      const ind = document.querySelector('.nav-drop-ind');
+      if (ind) ind.remove();
+    });
 
     // outline your whole book from this panel: a note per chapter
     const note = document.createElement('div');
@@ -911,6 +1008,62 @@ $('#nav-add').onclick = () => {
   currentChapterId = book.chapterOrder[book.chapterOrder.length - 1] || null;
   newChapter();
 };
+
+// drop target for chapter reordering, with a gold line showing the landing spot
+const navList = $('#nav-list');
+function navDropInd() {
+  let ind = document.querySelector('.nav-drop-ind');
+  if (!ind) {
+    ind = document.createElement('div');
+    ind.className = 'nav-drop-ind';
+  }
+  return ind;
+}
+navList.addEventListener('dragover', (e) => {
+  if (!e.dataTransfer.types.includes('application/x-neo-chapter')) return;
+  e.preventDefault();
+  const ind = navDropInd();
+  const items = [...navList.querySelectorAll('.nav-item:not(.dragging)')];
+  let placed = false;
+  for (const it of items) {
+    const r = it.getBoundingClientRect();
+    if (e.clientY < r.top + r.height / 2) {
+      navList.insertBefore(ind, it);
+      placed = true;
+      break;
+    }
+  }
+  if (!placed) navList.appendChild(ind);
+});
+navList.addEventListener('dragleave', (e) => {
+  if (navList.contains(e.relatedTarget)) return;
+  const ind = document.querySelector('.nav-drop-ind');
+  if (ind) ind.remove();
+});
+navList.addEventListener('drop', async (e) => {
+  const chId = e.dataTransfer.getData('application/x-neo-chapter');
+  if (!chId) return;
+  e.preventDefault();
+  const ind = document.querySelector('.nav-drop-ind');
+  let index = book.chapterOrder.filter((c) => c !== chId).length;
+  if (ind) {
+    index = 0;
+    for (const c of navList.children) {
+      if (c === ind) break;
+      if (c.classList.contains('nav-item') && !c.classList.contains('dragging')) index++;
+    }
+    ind.remove();
+  }
+  const from = book.chapterOrder.indexOf(chId);
+  if (from === -1) return;
+  snapshotStructure('chapter reorder');
+  book.chapterOrder = book.chapterOrder.filter((c) => c !== chId);
+  book.chapterOrder.splice(index, 0, chId);
+  await saveMeta();
+  renderChapters(); // renumbers heads and rebuilds the nav
+  if (currentTab === 'outline') renderOutline();
+  toast('Chapters reordered — ⌘Z to undo');
+});
 
 function highlightNav() {
   $$('.nav-item').forEach((el) => el.classList.toggle('current', el.dataset.id === currentChapterId));
@@ -981,8 +1134,13 @@ darlingsTab.addEventListener('drop', async (e) => {
   darlingsTab.classList.remove('drag-over');
   const html = e.dataTransfer.getData('text/html');
   const text = e.dataTransfer.getData('text/plain');
-  if (!text || !text.trim()) return;
+  await moveSelectionToDarlings(html, text);
+});
 
+// The one move shared by drag-to-tab and ⌘⇧D: words leave the manuscript
+// but are never lost, and an invisible anchor marks the exact spot.
+async function moveSelectionToDarlings(html, text) {
+  if (!text || !text.trim() || !book) return;
   const sel = window.getSelection();
   const srcChapter = sel.rangeCount
     ? sel.getRangeAt(0).startContainer.parentElement?.closest?.('.chapter')
@@ -991,8 +1149,8 @@ darlingsTab.addEventListener('drop', async (e) => {
   const chIdx = book.chapterOrder.indexOf(chId);
   const did = 'd-' + Date.now().toString(36);
 
-  // the whole point: the words leave the manuscript but are never lost —
-  // and an invisible anchor marks the exact spot they came from
+  snapshotStructure('darling');
+
   if (sel.rangeCount && !sel.isCollapsed) {
     sel.deleteFromDocument();
     const r = sel.getRangeAt(0);
@@ -1008,6 +1166,7 @@ darlingsTab.addEventListener('drop', async (e) => {
     const body = document.querySelector(`.chapter[data-id="${chId}"] .chapter-body`);
     if (body) {
       chapterHTML[chId] = body.innerHTML;
+      wordCache[chId] = null;
       scheduleChapterSave(chId);
     }
   }
@@ -1022,8 +1181,23 @@ darlingsTab.addEventListener('drop', async (e) => {
   });
   await window.neo.writeJSON(book.id, 'darlings', darlings);
   updateCounters();
-  toast('Saved to Darlings — kill without remorse');
-});
+  toast('Saved to Darlings — kill without remorse (⌘Z to undo)');
+}
+
+// keyboard route: select a passage, ⌘⇧D, keep writing
+function darlingFromKeyboard() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount || sel.isCollapsed) {
+    toast('Select the passage first, then ⌘⇧D sends it to Darlings');
+    return;
+  }
+  let el = sel.anchorNode;
+  if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+  if (!el || !el.closest || !el.closest('.chapter-body')) return;
+  const holder = document.createElement('div');
+  holder.appendChild(sel.getRangeAt(0).cloneContents());
+  moveSelectionToDarlings(holder.innerHTML, sel.toString());
+}
 
 function switchTab(name) {
   currentTab = name;
@@ -1327,6 +1501,7 @@ function renderDarlings() {
       <span><button class="d-restore">Restore</button> <button class="d-del">Delete forever</button></span>`;
     meta.querySelector('.d-restore').onclick = () => restoreDarling(d.id);
     meta.querySelector('.d-del').onclick = async () => {
+      snapshotStructure('darling delete');
       // tidy up the invisible anchor this darling left behind
       const anchor = document.querySelector(`.darling-anchor[data-did="${d.id}"]`);
       if (anchor) {
@@ -1348,6 +1523,7 @@ function renderDarlings() {
 async function restoreDarling(id) {
   const d = darlings.find((x) => x.id === id);
   if (!d) return;
+  snapshotStructure('darling restore');
   switchTab('manuscript');
 
   // Preferred: put it back in the exact spot it was cut from
@@ -1397,10 +1573,8 @@ async function restoreDarling(id) {
 /*  COUNTERS                                                           */
 /* ================================================================== */
 
-const WORDS_PER_PAGE = 250;
-
 function bookWordCount() {
-  return book.chapterOrder.reduce((sum, chId) => sum + countWords(chapterText(chId)), 0);
+  return book.chapterOrder.reduce((sum, chId) => sum + chapterWords(chId), 0);
 }
 
 function updateCounters() {
@@ -1410,7 +1584,7 @@ function updateCounters() {
   if (wordMode === 'book') {
     wc.textContent = total.toLocaleString() + ' words';
   } else {
-    const n = currentChapterId ? countWords(chapterText(currentChapterId)) : 0;
+    const n = currentChapterId ? chapterWords(currentChapterId) : 0;
     const idx = book.chapterOrder.indexOf(currentChapterId);
     wc.textContent = `ch. ${idx + 1}: ${n.toLocaleString()} words`;
   }
@@ -1461,6 +1635,25 @@ $('#word-counter').onclick = () => {
   wordMode = wordMode === 'book' ? 'chapter' : 'book';
   updateCounters();
 };
+
+// select a passage → the counter quietly reports its size
+document.addEventListener('selectionchange', () => {
+  if (!book || currentTab !== 'manuscript') return;
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) {
+    let el = sel.anchorNode;
+    if (el && el.nodeType === Node.TEXT_NODE) el = el.parentElement;
+    if (el && el.closest && el.closest('.chapter-body')) {
+      const n = countWords(sel.toString());
+      if (n > 0) {
+        $('#word-counter').textContent = n.toLocaleString() + ' selected';
+        return;
+      }
+    }
+  }
+  clearTimeout(saveTimers.selcount);
+  saveTimers.selcount = setTimeout(() => { if (book) updateCounters(); }, 150);
+});
 
 // track which chapter you're scrolled to
 $('#paper-scroll').addEventListener('scroll', () => {
@@ -1515,16 +1708,80 @@ function flushAllSaves() {
 }
 
 window.addEventListener('beforeunload', flushAllSaves);
+// belt and suspenders: flush whenever focus leaves NEO, and every 20 seconds
+window.addEventListener('blur', () => { if (book) flushAllSaves(); });
+setInterval(() => { if (book) flushAllSaves(); }, 20000);
 
 async function backToShelf() {
   flushAllSaves();
   book = null;
   currentChapterId = null;
+  undoStack = [];
   $('#editor-view').hidden = true;
   $('#bookshelf-view').hidden = false;
   renderShelves();
 }
 $('#back-to-shelf').onclick = backToShelf;
+
+/* ================================================================== */
+/*  STRUCTURAL UNDO                                                    */
+/*  Typing has the native ⌘Z. This covers the big moves — chapter      */
+/*  deletes, replace-all, darlings — with snapshots of the whole       */
+/*  structure, restored in one keystroke.                              */
+/* ================================================================== */
+
+let undoStack = [];
+
+function snapshotStructure(label) {
+  if (!book) return;
+  undoStack.push({
+    label,
+    chapterOrder: [...book.chapterOrder],
+    chapterHTML: { ...chapterHTML },
+    chapterTitles: { ...(book.chapterTitles || {}) },
+    chapterNotes: { ...(book.chapterNotes || {}) },
+    sectionNotes: JSON.parse(JSON.stringify(book.sectionNotes || {})),
+    darlings: JSON.parse(JSON.stringify(darlings)),
+    stickies: JSON.parse(JSON.stringify(stickies))
+  });
+  if (undoStack.length > 10) undoStack.shift();
+}
+
+async function structuralUndo() {
+  const snap = undoStack.pop();
+  if (!snap || !book) return;
+  book.chapterOrder = snap.chapterOrder;
+  chapterHTML = snap.chapterHTML;
+  book.chapterTitles = snap.chapterTitles;
+  book.chapterNotes = snap.chapterNotes;
+  book.sectionNotes = snap.sectionNotes;
+  darlings = snap.darlings;
+  stickies = snap.stickies;
+  // resurrect any chapter files the action may have deleted
+  for (const chId of book.chapterOrder) {
+    await window.neo.writeChapter(book.id, chId, chapterHTML[chId] || '<p><br></p>');
+  }
+  await window.neo.writeJSON(book.id, 'darlings', darlings);
+  await window.neo.writeJSON(book.id, 'stickies', stickies);
+  await saveMeta();
+  currentChapterId = book.chapterOrder.includes(currentChapterId) ? currentChapterId : null;
+  renderChapters();
+  renderStickies();
+  if (currentTab === 'darlings') renderDarlings();
+  if (currentTab === 'outline') renderOutline();
+  updateCounters();
+  toast('Undone: ' + snap.label);
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.key.toLowerCase() !== 'z') return;
+  if ($('#editor-view').hidden || !book || !undoStack.length) return;
+  const ae = document.activeElement;
+  // inside text, ⌘Z belongs to typing; outside it, it belongs to structure
+  if (ae && (ae.isContentEditable || ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+  e.preventDefault();
+  structuralUndo();
+});
 
 /* ================================================================== */
 /*  FIND & REPLACE                                                     */
@@ -1640,6 +1897,7 @@ function replaceCurrent() {
 function replaceAllMatches() {
   const q = $('#search-input').value;
   if (!q) return;
+  snapshotStructure('replace all');
   const rep = $('#replace-input').value;
   const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
   let n = 0;
@@ -1659,7 +1917,8 @@ function replaceAllMatches() {
     }
     if (touched) syncChapter(body, chId);
   }
-  toast(n + ' replaced across the whole book');
+  if (n === 0) undoStack.pop(); // nothing changed, nothing to undo
+  toast(n ? `${n} replaced across the whole book — ⌘Z to undo` : '0 replaced');
   runSearch();
 }
 
@@ -2036,6 +2295,9 @@ function applyFonts() {
   if (f.dropcap && DROPCAP_FONTS[f.dropcap]) {
     document.documentElement.style.setProperty('--dropcap-font', DROPCAP_FONTS[f.dropcap]);
   }
+  document.body.classList.toggle('night', library.pageTheme === 'night');
+  const size = Math.min(22, Math.max(14, library.editorFontSize || 17));
+  document.documentElement.style.setProperty('--editor-size', size + 'px');
 }
 
 function showHelp() {
@@ -2051,6 +2313,8 @@ function showHelp() {
         ${row('Enter ×2', 'Section break (***)')}
         ${row('Enter ×3', 'New chapter, auto-numbered')}
         ${row('⌘⇧X', 'Placeholder note — mark it, keep writing')}
+        ${row('⌘⇧D', 'Send the selected passage to Darlings')}
+        ${row('⌘Z', 'Undo big moves (chapter deletes, replace-all, darlings) when not mid-typing')}
         ${row('-- and ...', 'Become an em dash — and a true ellipsis …')}
         ${row('⌘B · ⌘I', 'Bold, italic. Quotes curl themselves.')}
       </div>
@@ -2081,6 +2345,7 @@ function showHelp() {
       <div class="help-grid">
         ${row('Drag text', 'Onto the Darlings tab — saved, never lost')}
         ${row('Right-click', 'Books, shelf names, chapter headings, outline lines')}
+        ${row('Drag chapters', 'In the left panel, to reorder — everything renumbers')}
         ${row('Double-click', 'A tab, to rename it')}
         ${row('Click counters', 'Cycle word counts · open goals &amp; sprints')}
       </div>
@@ -2105,7 +2370,7 @@ function safeName(s) {
 }
 
 function exportChapters() {
-  // [{num, paragraphs: [{text, sceneBreak, html}]}]
+  // [{num, heading, paras: [{text, sceneBreak, html}]}]
   return book.chapterOrder.map((chId, i) => {
     const holder = cleanChapterEl(chId);
     const paras = [...holder.querySelectorAll('p')].map((p) => ({
@@ -2113,7 +2378,8 @@ function exportChapters() {
       text: p.innerText.trim(),
       html: p.outerHTML
     })).filter((p) => p.sceneBreak || p.text);
-    return { num: i + 1, paras };
+    const t = (book.chapterTitles || {})[chId];
+    return { num: i + 1, heading: 'Chapter ' + (i + 1) + (t ? ' — ' + t : ''), paras };
   });
 }
 
@@ -2122,7 +2388,7 @@ function buildTxt() {
   if (book.subtitle) out += `${book.subtitle}\n`;
   out += `by ${book.author}\n\n\n`;
   for (const ch of exportChapters()) {
-    out += `CHAPTER ${ch.num}\n\n`;
+    out += `${ch.heading.toUpperCase()}\n\n`;
     for (const p of ch.paras) out += p.sceneBreak ? '\n***\n\n' : p.text + '\n\n';
     out += '\n';
   }
@@ -2134,7 +2400,7 @@ function buildMd() {
   if (book.subtitle) out += `*${book.subtitle}*\n\n`;
   out += `**by ${book.author}**\n\n`;
   for (const ch of exportChapters()) {
-    out += `\n## Chapter ${ch.num}\n\n`;
+    out += `\n## ${ch.heading}\n\n`;
     for (const p of ch.paras) out += p.sceneBreak ? '\n\\*\\*\\*\n\n' : p.text + '\n\n';
   }
   return out;
@@ -2145,7 +2411,7 @@ function buildHtml() {
   const stamp = new Date().toLocaleString();
   const chaptersHtml = exportChapters().map((ch) => `
     <section class="chapter">
-      <h2>Chapter ${ch.num}</h2>
+      <h2>${ch.heading}</h2>
       ${ch.paras.map((p) => p.sceneBreak ? '<p class="brk">***</p>' : p.html).join('\n')}
     </section>`).join('\n');
   return `<!DOCTYPE html>
@@ -2219,7 +2485,7 @@ function buildDocxEntries() {
   if (book.subtitle) body.push(docxP([{ text: book.subtitle, i: true }], { align: 'center', size: 32 }));
   body.push(docxP([{ text: book.author }], { align: 'center', spaceBefore: 800 }));
   exportChapters().forEach((ch, idx) => {
-    body.push(docxP([{ text: 'CHAPTER ' + ch.num, b: false }], { align: 'center', pageBreak: true, spaceBefore: 1200, size: 28 }));
+    body.push(docxP([{ text: ch.heading.toUpperCase(), b: false }], { align: 'center', pageBreak: true, spaceBefore: 1200, size: 28 }));
     body.push(docxP([], {}));
     for (const p of ch.paras) {
       if (p.sceneBreak) body.push(docxP([{ text: '***' }], { align: 'center', spaceBefore: 240 }));
@@ -2314,8 +2580,8 @@ function chapterXhtml(ch) {
   return `<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
 <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
-<head><title>Chapter ${ch.num}</title><link rel="stylesheet" type="text/css" href="style.css"/></head>
-<body><section epub:type="chapter"><h1>Chapter ${ch.num}</h1>
+<head><title>${escXml(ch.heading)}</title><link rel="stylesheet" type="text/css" href="style.css"/></head>
+<body><section epub:type="chapter"><h1>${escXml(ch.heading)}</h1>
 ${paras}
 </section></body></html>`;
 }
@@ -2327,9 +2593,9 @@ function buildEpubEntries() {
   const chItems = chapters.map((ch) =>
     `<item id="ch${ch.num}" href="ch${ch.num}.xhtml" media-type="application/xhtml+xml"/>`).join('\n');
   const chSpine = chapters.map((ch) => `<itemref idref="ch${ch.num}"/>`).join('\n');
-  const navPoints = chapters.map((ch) => `<li><a href="ch${ch.num}.xhtml">Chapter ${ch.num}</a></li>`).join('\n');
+  const navPoints = chapters.map((ch) => `<li><a href="ch${ch.num}.xhtml">${escXml(ch.heading)}</a></li>`).join('\n');
   const ncxPoints = chapters.map((ch) => `
-<navPoint id="ch${ch.num}" playOrder="${ch.num + 1}"><navLabel><text>Chapter ${ch.num}</text></navLabel><content src="ch${ch.num}.xhtml"/></navPoint>`).join('');
+<navPoint id="ch${ch.num}" playOrder="${ch.num + 1}"><navLabel><text>${escXml(ch.heading)}</text></navLabel><content src="ch${ch.num}.xhtml"/></navPoint>`).join('');
 
   const entries = [
     { path: 'mimetype', content: 'application/epub+zip', store: true },
@@ -2518,6 +2784,18 @@ window.neo.onMenu(async (msg) => {
   if (msg.type === 'import') importBooks();
   if (msg.type === 'silo') toggleSilo();
   if (msg.type === 'stats') openStats();
+  if (msg.type === 'pageTheme') {
+    library.pageTheme = msg.value;
+    await window.neo.writeLibrary(library);
+    applyFonts();
+    toast(msg.value === 'night' ? 'Night page — easy on midnight eyes' : 'Paper page');
+  }
+  if (msg.type === 'fontSize') {
+    const cur = library.editorFontSize || 17;
+    library.editorFontSize = msg.value === 0 ? 17 : Math.min(22, Math.max(14, cur + msg.value));
+    await window.neo.writeLibrary(library);
+    applyFonts();
+  }
   if (msg.type === 'bodyFont') {
     library.fonts = library.fonts || {};
     library.fonts.body = msg.value;
