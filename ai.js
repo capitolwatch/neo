@@ -144,6 +144,40 @@ const AUDIT_SCHEMA = {
   additionalProperties: false
 };
 
+// Every word the model ever produced for this project, appended as it happens.
+// Two purposes: it makes the prose check possible, and it is the evidentiary
+// record if anyone ever asks what the AI actually wrote.
+function logOutput(libraryDir, kind, text) {
+  try {
+    if (!text) return;
+    fs.appendFileSync(
+      path.join(libraryDir, 'ai-outputs.jsonl'),
+      JSON.stringify({ at: new Date().toISOString(), kind, text }) + '\n'
+    );
+  } catch { /* logging must never break the feature */ }
+}
+
+// Words in common, not style. Either a phrase the model produced appears in
+// the manuscript or it doesn't — no detector, no opinion, no false positives
+// from someone simply writing well.
+function normalize(s) {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+    .replace(/[^a-z0-9' ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function grams(words, n) {
+  const out = new Map();
+  for (let i = 0; i + n <= words.length; i++) {
+    const key = words.slice(i, i + n).join(' ');
+    if (!out.has(key)) out.set(key, i);
+  }
+  return out;
+}
+
 function registerAI({ ipcMain, app, safeStorage, libraryDir, readJSON, logError }) {
   // userData, never the library — the library is synced to iCloud.
   const keyFile = () => path.join(app.getPath('userData'), 'anthropic.key');
@@ -239,6 +273,8 @@ Suggest which pile this belongs in, and flag anything wrong with the card as a r
       const block = res.content.find((b) => b.type === 'text');
       const parsed = block ? JSON.parse(block.text) : null;
       if (!parsed) return { ok: false, error: 'no suggestion returned' };
+      logOutput(libraryDir, 'card-suggestion',
+        [parsed.reasoning, ...(parsed.flags || []).map((f) => f.why)].join(' '));
       return { ok: true, suggestion: parsed };
     } catch (err) {
       logError('ai', err);
@@ -315,10 +351,59 @@ it, leave it empty rather than inferring it.`,
       const block = res.content.find((b) => b.type === 'text');
       const fields = block ? JSON.parse(block.text) : null;
       if (!fields) return { ok: false, error: 'nothing came back' };
+      logOutput(libraryDir, 'source-lookup', Object.values(fields).filter((v) => typeof v === 'string').join(' '));
       return { ok: true, fields, candidates };
     } catch (err) {
       logError('ai', err);
       return { ok: false, error: err.message || 'lookup failed' };
+    }
+  });
+
+  // Does any phrase the model produced appear in the manuscript? Pure string
+  // work — no model, no network, no judgement. A hit means look, not guilty.
+  ipcMain.handle('ai:proseCheck', (_e, bookId, n) => {
+    const RUN = Math.max(5, Number(n) || 8);
+    try {
+      const bookDir = path.join(libraryDir, bookId);
+      const meta = readJSON(path.join(bookDir, 'book.json'), null);
+      if (!meta) return { ok: false, error: 'could not read the book' };
+
+      const logFile = path.join(libraryDir, 'ai-outputs.jsonl');
+      if (!fs.existsSync(logFile)) {
+        return { ok: true, matches: [], outputs: 0, note: 'No AI output has been recorded for this library yet.' };
+      }
+      const entries = fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean)
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+
+      // Every run of RUN words the model has ever produced.
+      const aiGrams = new Map();
+      for (const e of entries) {
+        const w = normalize(e.text).split(' ').filter(Boolean);
+        for (const [g] of grams(w, RUN)) if (!aiGrams.has(g)) aiGrams.set(g, e);
+      }
+
+      const strip = (html) => String(html || '')
+        .replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+
+      const matches = [];
+      for (const chId of (meta.chapterOrder || [])) {
+        let html = '';
+        try { html = fs.readFileSync(path.join(bookDir, 'chapters', `${chId}.html`), 'utf8'); } catch { continue; }
+        const plain = strip(html);
+        const words = normalize(plain).split(' ').filter(Boolean);
+        const seen = new Set();
+        for (const [g] of grams(words, RUN)) {
+          if (aiGrams.has(g) && !seen.has(g)) {
+            seen.add(g);
+            const e = aiGrams.get(g);
+            matches.push({ chapter: chId, phrase: g, from: e.kind, at: e.at });
+          }
+        }
+      }
+      return { ok: true, matches, outputs: entries.length, run: RUN };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message };
     }
   });
 
@@ -397,6 +482,8 @@ it, leave it empty rather than inferring it.`,
       const block = res.content.find((b) => b.type === 'text');
       const parsed = block ? JSON.parse(block.text) : null;
       if (!parsed) return { ok: false, error: 'no findings returned' };
+      logOutput(libraryDir, 'audit',
+        [parsed.summary, ...(parsed.findings || []).map((f) => f.why + ' ' + f.fix)].join(' '));
       return { ok: true, ...parsed, withheld, cardCount: evidence.length };
     } catch (err) {
       logError('ai', err);
@@ -405,4 +492,4 @@ it, leave it empty rather than inferring it.`,
   });
 }
 
-module.exports = { registerAI };
+module.exports = { registerAI, normalize, grams };

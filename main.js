@@ -585,6 +585,11 @@ function buildMenu() {
       label: 'Research',
       submenu: [
         {
+          label: 'Insert Card…',
+          accelerator: 'CmdOrCtrl+Shift+K',
+          click: () => sendToWindow({ type: 'insertCard' })
+        },
+        {
           label: 'Card Board…',
           accelerator: 'CmdOrCtrl+Shift+B',
           click: () => sendToWindow({ type: 'board' })
@@ -595,6 +600,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'sources' })
         },
         { type: 'separator' },
+        {
+          label: 'Check My Prose…',
+          click: () => sendToWindow({ type: 'proseCheck' })
+        },
         {
           label: 'Rigor Audit…',
           accelerator: 'CmdOrCtrl+Shift+A',

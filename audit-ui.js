@@ -119,6 +119,63 @@
       </div>`;
   }
 
-  neo.onMenu((msg) => { if (msg && msg.type === 'audit') openAudit(); });
+  // -------------------------------------------------------------------------
+  // Prose check — is any of the model's wording in your book?
+  // Deterministic: string matching against a log of everything it ever said.
+  // -------------------------------------------------------------------------
+
+  async function openProseCheck() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(660px,92vw);max-height:80vh;overflow:auto">
+        <h2 style="font-size:16px;margin:0 0 10px">Check my prose</h2>
+        <div id="pc-body" style="font-size:13px;color:#999;line-height:1.6">Comparing…</div>
+        <div style="text-align:right;margin-top:16px">
+          <button id="pc-close" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 18px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#pc-close').addEventListener('click', shut);
+
+    const out = await neo.ai.proseCheck(bk.id, 8);
+    const host = bd.querySelector('#pc-body');
+
+    if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+
+    if (!out.matches.length) {
+      host.innerHTML = `
+        <div style="color:#6b9c86;margin-bottom:10px">No AI wording found in your manuscript.</div>
+        <div style="color:#888">Compared every run of ${out.run || 8} consecutive words against
+          ${out.outputs} recorded AI output${out.outputs === 1 ? '' : 's'}.
+          ${esc(out.note || '')}</div>
+        <div style="color:#777;font-size:12px;margin-top:10px">This is a string comparison, not a style guess —
+          it can only find wording the model actually produced here. It says nothing about text from anywhere else.</div>`;
+      return;
+    }
+
+    host.innerHTML = `
+      <div style="color:#c9a96b;margin-bottom:12px">${out.matches.length} passage${out.matches.length === 1 ? '' : 's'}
+        in your manuscript match wording the model produced. A match means look, not guilty —
+        ordinary phrasing collides sometimes.</div>
+      ${out.matches.map((m) => `
+        <div style="border-left:3px solid #7a6a3a;background:#25220f;padding:9px 12px;margin-bottom:8px">
+          <div style="font-size:12px;color:#d8cfae;font-style:italic">“${esc(m.phrase)}”</div>
+          <div style="font-size:10px;color:#8a7a5a;margin-top:4px">from a ${esc(m.from)} on ${esc(String(m.at).slice(0, 10))}</div>
+        </div>`).join('')}`;
+  }
+
+  neo.onMenu((msg) => {
+    if (!msg) return;
+    if (msg.type === 'audit') openAudit();
+    if (msg.type === 'proseCheck') openProseCheck();
+  });
   window.openAudit = openAudit;
+  window.openProseCheck = openProseCheck;
 })();
