@@ -11,7 +11,7 @@
     "package:all": "electron-builder --mac --win"
   },
   "build": {
-    "appId": "com.hughhowey.neo",
+    "appId": "com.mymediamatters.neo",
     "productName": "NEO",
     "publish": {
       "provider": "github",
@@ -21,8 +21,18 @@
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
-        { "target": "dmg", "arch": ["universal"] },
-        { "target": "zip", "arch": ["universal"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "universal"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "universal"
+          ]
+        }
       ],
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -45,8 +55,9 @@
     "electron-builder": "^26.15.3"
   },
   "dependencies": {
-    "jszip": "^3.10.1",
-    "electron-updater": "^6.3.9"
+    "@anthropic-ai/sdk": "^0.117.1",
+    "electron-updater": "^6.3.9",
+    "jszip": "^3.10.1"
   },
   "allowScripts": {
     "electron@33.4.11": true

@@ -53,6 +53,30 @@ ipcMain.handle('library:read', () => {
   return readJSON(LIBRARY_FILE, null);
 });
 
+// A real cover image, replacing the generated gradient. Copied into the book's
+// own folder so the book stays self-contained and travels with its jacket.
+ipcMain.handle('book:setCover', async (_e, bookId) => {
+  const picked = await dialog.showOpenDialog({
+    title: 'Choose a cover image',
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp', 'heic'] }]
+  });
+  if (picked.canceled || !picked.filePaths.length) return null;
+  try {
+    const from = picked.filePaths[0];
+    const ext = path.extname(from).toLowerCase().replace('.', '') || 'jpg';
+    const name = `cover.${ext}`;
+    fs.copyFileSync(from, path.join(bookDir(bookId), name));
+    return name;
+  } catch (err) {
+    logError('cover', err);
+    return null;
+  }
+});
+
+ipcMain.handle('book:coverPath', (_e, bookId, file) =>
+  file ? path.join(bookDir(bookId), file) : null);
+
 ipcMain.handle('library:write', (_e, data) => {
   ensureLibrary();
   writeJSON(LIBRARY_FILE, data);
@@ -380,6 +404,19 @@ process.on('unhandledRejection', (err) => logError('main-promise', err));
 ipcMain.handle('log:error', (_e, msg) => logError('renderer', msg));
 
 // One zip of the whole library per day, keeping the last 14. Cheap insurance.
+// Newest mtime anywhere in the library, ignoring the backups themselves.
+// Used to decide whether today's zip is stale rather than merely present.
+function libraryTouchedAt(dir, rel = '') {
+  let newest = 0;
+  for (const name of fs.readdirSync(dir)) {
+    if (rel === '' && (name === 'Backups' || name === 'Exports')) continue;
+    const full = path.join(dir, name);
+    const stat = fs.statSync(full);
+    newest = Math.max(newest, stat.isDirectory() ? libraryTouchedAt(full, rel + '/' + name) : stat.mtimeMs);
+  }
+  return newest;
+}
+
 async function dailyBackup() {
   try {
     ensureLibrary();
@@ -387,7 +424,11 @@ async function dailyBackup() {
     if (!fs.existsSync(backupsDir)) fs.mkdirSync(backupsDir, { recursive: true });
     const today = new Date().toISOString().slice(0, 10);
     const target = path.join(backupsDir, `neo-backup-${today}.zip`);
-    if (fs.existsSync(target)) return;
+
+    // Rewrite today's zip whenever the library has moved on since it was
+    // written. The old check skipped on existence alone, so a backup taken
+    // before a day's writing stayed empty until the next day.
+    if (fs.existsSync(target) && fs.statSync(target).mtimeMs >= libraryTouchedAt(LIBRARY_DIR)) return;
 
     const JSZip = require('jszip');
     const zip = new JSZip();
@@ -398,6 +439,9 @@ async function dailyBackup() {
         const full = path.join(dir, name);
         const relPath = rel ? rel + '/' + name : name;
         const stat = fs.statSync(full);
+        // Source records are small and precious; the pinned PDFs beside them
+        // are neither, and would churn gigabytes through every backup.
+        if (relPath.startsWith('sources/') && !stat.isDirectory() && !name.endsWith('.json')) continue;
         if (stat.isDirectory()) walk(full, relPath);
         else zip.file(relPath, fs.readFileSync(full));
       }
@@ -509,6 +553,10 @@ function buildMenu() {
           accelerator: 'CmdOrCtrl+Shift+I',
           click: () => sendToWindow({ type: 'import' })
         },
+        {
+          label: 'Set Book Cover…',
+          click: () => sendToWindow({ type: 'setCover' })
+        },
         { type: 'separator' },
         { role: 'close' }
       ]
@@ -530,6 +578,27 @@ function buildMenu() {
           label: 'Spellcheck Pass',
           accelerator: 'CmdOrCtrl+;',
           click: () => sendToWindow({ type: 'spellcheck' })
+        }
+      ]
+    },
+    {
+      label: 'Research',
+      submenu: [
+        {
+          label: 'Card Board…',
+          accelerator: 'CmdOrCtrl+Shift+B',
+          click: () => sendToWindow({ type: 'board' })
+        },
+        {
+          label: 'Sources…',
+          accelerator: 'CmdOrCtrl+Shift+R',   // ⌘⇧S is the Silo
+          click: () => sendToWindow({ type: 'sources' })
+        },
+        { type: 'separator' },
+        {
+          label: 'Rigor Audit…',
+          accelerator: 'CmdOrCtrl+Shift+A',
+          click: () => sendToWindow({ type: 'audit' })
         }
       ]
     },
@@ -631,6 +700,28 @@ function checkForUpdates() {
   }
 }
 
+// Research lives in its own modules — see sources.js for why.
+require('./cards').registerCards({ ipcMain, libraryDir: LIBRARY_DIR, readJSON, writeJSON, logError });
+
+require('./ai').registerAI({
+  ipcMain,
+  app,
+  safeStorage: require('electron').safeStorage,
+  libraryDir: LIBRARY_DIR,
+  readJSON,
+  logError
+});
+
+require('./sources').registerSources({
+  ipcMain,
+  dialog,
+  shell: require('electron').shell,
+  libraryDir: LIBRARY_DIR,
+  readJSON,
+  writeJSON,
+  logError
+});
+
 app.whenReady().then(() => {
   // macOS press-and-hold accent picker can open invisibly inside Chromium
   // and re-emit swallowed keys as phantom repeated letters. Within NEO,
@@ -647,9 +738,28 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   dailyBackup();
+  // A day's writing shouldn't ride on one backup taken at launch.
+  setInterval(dailyBackup, 2 * 60 * 60 * 1000);
   checkForUpdates();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  });
+});
+
+// Back up on the way out, so the last session's work is captured even if the
+// app is only ever opened and closed within a single day. Bounded so a slow or
+// stuck backup can never trap the user in an app that won't quit.
+let quitBackupDone = false;
+app.on('before-quit', (e) => {
+  if (quitBackupDone) return;
+  e.preventDefault();
+  const bounded = Promise.race([
+    dailyBackup(),
+    new Promise((resolve) => setTimeout(resolve, 8000))
+  ]);
+  bounded.catch((err) => logError('backup', err)).finally(() => {
+    quitBackupDone = true;
+    app.quit();
   });
 });
 

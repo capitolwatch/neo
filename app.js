@@ -333,6 +333,7 @@ function coverGradient(meta) {
 function bookTile(meta) {
   const el = document.createElement('div');
   el.className = 'book cover cv-serif'; // the house style: Didot, framed
+  el.dataset.id = meta.id;              // lets a cover image find its tile
   el.draggable = true;
   el.innerHTML = `
     <div class="b-title"></div>
