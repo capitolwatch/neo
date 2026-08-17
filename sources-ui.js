@@ -24,6 +24,7 @@
   const FIELDS = {
     book: [
       ['publisher', 'Publisher'],
+      ['place', 'Place of publication', 'Chicago wants the city — e.g. Norman, or Norman, OK'],
       ['year', 'Year'],
       ['edition', 'Edition / printing', 'Page numbers are unverifiable without this'],
       ['isbn', 'ISBN']

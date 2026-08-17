@@ -668,6 +668,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'proseCheck' })
         },
         {
+          label: 'Fact-Check Dossier…',
+          click: () => sendToWindow({ type: 'dossier' })
+        },
+        {
           label: 'Rigor Audit…',
           accelerator: 'CmdOrCtrl+Shift+A',
           click: () => sendToWindow({ type: 'audit' })

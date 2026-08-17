@@ -49,7 +49,7 @@ function blankSource(family) {
   };
 
   const perFamily = {
-    book: { publisher: '', year: '', edition: '', printing: '', isbn: '' },
+    book: { publisher: '', place: '', year: '', edition: '', printing: '', isbn: '' },
     // A statute is several sources over time. Each version carries its own
     // effective date and its own pinned copy; cards cite one version.
     document: { jurisdiction: '', citation: '', officialUrl: '', versions: [] },

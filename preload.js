@@ -52,7 +52,9 @@ contextBridge.exposeInMainWorld('neo', {
 
   citations: {
     build: (bookId) => ipcRenderer.invoke('citations:build', bookId),
-    save: (bookId, html) => ipcRenderer.invoke('citations:save', bookId, html)
+    save: (bookId, html) => ipcRenderer.invoke('citations:save', bookId, html),
+    dossier: (bookId) => ipcRenderer.invoke('citations:dossier', bookId),
+    saveDossier: (bookId, html) => ipcRenderer.invoke('citations:saveDossier', bookId, html)
   },
 
   board: {

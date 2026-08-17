@@ -101,6 +101,96 @@
     });
   }
 
-  neo.onMenu((msg) => { if (msg && msg.type === 'citations') open(); });
+  // -------------------------------------------------------------------------
+  // The fact-check dossier
+  // -------------------------------------------------------------------------
+
+  async function openDossier() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(900px,96vw);max-height:90vh;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <h2 style="font-size:16px;margin:0">Fact-check dossier</h2>
+          <span id="dx-meta" style="font-size:12px;color:#777"></span>
+        </div>
+        <div id="dx-body" style="flex:1;overflow:auto;margin:14px 0"></div>
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <button id="dx-save" style="background:var(--accent);border:none;border-radius:6px;padding:7px 15px;color:#191919" disabled>Save beside the book</button>
+          <button id="dx-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 16px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#dx-x').addEventListener('click', shut);
+
+    const out = await neo.citations.dossier(bk.id);
+    const host = bd.querySelector('#dx-body');
+    if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+    if (!out.entries.length) {
+      host.innerHTML = `<p style="color:#999">Nothing sourced yet.</p>
+        <p style="color:#777;font-size:12px">The dossier is built from cards placed in the manuscript with ⌘⇧K.</p>`;
+      return;
+    }
+
+    bd.querySelector('#dx-meta').textContent =
+      `${out.entries.length} sourced claim${out.entries.length === 1 ? '' : 's'}` +
+      (out.unverified ? ` · ${out.unverified} unverified` : '') +
+      (out.noLocator ? ` · ${out.noLocator} without a locator` : '');
+
+    const row = (e, i) => `
+      <div style="border:1px solid #2c2c2c;border-radius:7px;padding:12px 14px;margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;gap:10px;font-size:10px;color:#777;margin-bottom:7px">
+          <span>${i + 1}${e.chapter ? ' · ' + esc(e.chapter) : ''}</span>
+          <span>${e.verified ? '<span style="color:#6b9c86">verified</span>' : '<span style="color:#c9a96b">NOT VERIFIED</span>'}</span>
+        </div>
+        <div style="font-size:13px;color:#ddd;line-height:1.6;margin-bottom:9px">${esc(e.claim)}</div>
+        <table style="width:100%;font-size:11px;color:#9aa5aa;border-collapse:collapse">
+          <tr><td style="width:98px;color:#6d777c;padding:2px 0">source</td><td>${esc(e.source)}${e.author ? ' — ' + esc(e.author) : ''}</td></tr>
+          ${e.version ? `<tr><td style="color:#6d777c;padding:2px 0">version</td><td>${esc(e.version)}</td></tr>` : ''}
+          <tr><td style="color:#6d777c;padding:2px 0">locator</td><td>${e.locator ? esc(e.locator) : '<span style="color:#c98b6b">none — reader cannot find this</span>'}</td></tr>
+          ${e.fingerprint ? `<tr><td style="color:#6d777c;padding:2px 0">sha-256</td><td style="font-family:monospace">${esc(String(e.fingerprint).slice(0, 24))}…</td></tr>` : ''}
+          ${e.method ? `<tr><td style="color:#6d777c;padding:2px 0">method</td><td>${esc(e.method)}</td></tr>` : ''}
+        </table>
+        ${e.captured ? `<div style="margin-top:9px;padding:8px 11px;background:#1e1e1e;border-left:2px solid #4d6b7a;font-size:12px;color:#c6cfd3;font-style:italic">${esc(e.captured)}</div>` : ''}
+      </div>`;
+
+    host.innerHTML =
+      (out.confidentialHeld ? `<div style="font-size:11px;color:#c9a96b;margin-bottom:12px">
+        ${out.confidentialHeld} claim${out.confidentialHeld === 1 ? '' : 's'} rest${out.confidentialHeld === 1 ? 's' : ''} on a confidential source.
+        The subject appears by code name only; supply real identities to counsel separately, never through this file.</div>` : '') +
+      out.entries.map(row).join('');
+
+    const save = bd.querySelector('#dx-save');
+    save.disabled = false;
+    save.addEventListener('click', async () => {
+      const html = `<h1>Fact-check dossier — ${esc(bk.title)}</h1>` +
+        `<p>${out.entries.length} sourced claims. Generated ${new Date().toISOString().slice(0, 10)}.</p>` +
+        out.entries.map((e, i) => `
+          <h3>${i + 1}. ${esc(e.chapter)}</h3>
+          <p><b>Claim:</b> ${esc(e.claim)}</p>
+          <p><b>Source:</b> ${esc(e.source)}${e.author ? ' — ' + esc(e.author) : ''}<br>
+             <b>Locator:</b> ${esc(e.locator || 'NONE')}<br>
+             ${e.version ? `<b>Version:</b> ${esc(e.version)}<br>` : ''}
+             ${e.fingerprint ? `<b>SHA-256:</b> ${esc(e.fingerprint)}<br>` : ''}
+             <b>Verified against source:</b> ${e.verified ? 'yes' : 'NO'}</p>
+          ${e.captured ? `<blockquote>${esc(e.captured)}</blockquote>` : ''}`).join('');
+      const p = await neo.citations.saveDossier(bk.id, html);
+      save.textContent = p ? 'Saved as fact-check.html' : 'Could not save';
+      save.disabled = true;
+    });
+  }
+
+  neo.onMenu((msg) => {
+    if (!msg) return;
+    if (msg.type === 'citations') open();
+    if (msg.type === 'dossier') openDossier();
+  });
   window.openCitations = open;
+  window.openDossier = openDossier;
 })();

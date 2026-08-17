@@ -54,7 +54,7 @@ function noteFor(src, locator) {
   const title = String(src.title || '').trim() || gap('title');
 
   if (src.family === 'book') {
-    const place = String(f.place || '').trim();       // not in the schema yet
+    const place = String(f.place || "").trim();
     const pub = String(f.publisher || '').trim() || gap('publisher');
     const year = String(f.year || '').trim() || gap('year');
     const ed = String(f.edition || '').trim();
@@ -251,6 +251,110 @@ function registerCitations({ ipcMain, libraryDir, readJSON, logError }) {
     } catch (err) {
       logError('citations', err);
       return { ok: false, error: err.message };
+    }
+  });
+
+  // The fact-check dossier: every sourced sentence beside the evidence behind
+  // it. This is what a publisher's legal review asks for, and assembling it by
+  // hand is the miserable fortnight every nonfiction author spends before
+  // submission. Generated, it takes a second.
+  ipcMain.handle('citations:dossier', (_e, bookId) => {
+    try {
+      const dir = path.join(libraryDir, bookId);
+      const meta = readJSON(path.join(dir, 'book.json'), null);
+      if (!meta) return { ok: false, error: 'could not read the book' };
+
+      const cards = readJSON(path.join(dir, 'cards.json'), []) || [];
+      const cardById = new Map(cards.map((c) => [c.id, c]));
+      const srcCache = new Map();
+      const readSource = (id) => {
+        if (!id) return null;
+        if (!srcCache.has(id)) srcCache.set(id, readJSON(path.join(libraryDir, 'sources', id, 'source.json'), null));
+        return srcCache.get(id);
+      };
+
+      const entries = [];
+      let confidentialHeld = 0;
+
+      for (const chId of (meta.chapterOrder || [])) {
+        let html = '';
+        try { html = fs.readFileSync(path.join(dir, 'chapters', `${chId}.html`), 'utf8'); } catch { continue; }
+        const chapterTitle = (meta.chapterTitles && meta.chapterTitles[chId]) || '';
+
+        for (const pm of html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+          const para = pm[1];
+          if (!/neo-cite/.test(para)) continue;
+
+          for (const m of para.matchAll(/<span[^>]*class="[^"]*neo-cite[^"]*"[^>]*>([\s\S]*?)<\/span>/gi)) {
+            const tag = m[0];
+            const attr = (n) => {
+              const a = new RegExp(`data-${n}="([^"]*)"`).exec(tag);
+              return a ? a[1] : '';
+            };
+            const card = cardById.get(attr('card')) || null;
+            const src = readSource(attr('source') || (card && card.sourceId));
+
+            // The claim as the reader will meet it: the whole sentence the
+            // anchor sits inside, not just the quoted fragment.
+            const plain = para.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            const marked = m[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            const at = plain.indexOf(marked.slice(0, 40));
+            const sentences = plain.split(/(?<=[.!?])\s+/);
+            let claim = plain;
+            if (at >= 0) {
+              let run = 0;
+              for (const sent of sentences) {
+                if (at >= run && at < run + sent.length + 1) { claim = sent; break; }
+                run += sent.length + 1;
+              }
+            }
+
+            if (src && src.confidential) confidentialHeld++;
+
+            const v = src && src.family === 'document'
+              ? ((src.document.versions || []).find((x) => x.id === (attr('version') || (card && card.versionId))) || null)
+              : null;
+
+            entries.push({
+              chapter: chapterTitle,
+              claim,
+              locator: attr('locator') || (card && card.locator) || '',
+              source: src ? src.title : '(source missing)',
+              sourceFamily: src ? src.family : '',
+              author: src ? src.author : '',
+              confidential: Boolean(src && src.confidential),
+              version: v ? (v.effectiveDate || v.asOf) : '',
+              fingerprint: src ? (src.sha256 || (v && v.sha256) || '') : '',
+              captured: card ? (card.text || card.draftText || '') : '',
+              cardType: card ? card.type : '',
+              verified: Boolean(card && card.verified),
+              method: card && card.method ? card.method : ''
+            });
+          }
+        }
+      }
+
+      return {
+        ok: true,
+        entries,
+        confidentialHeld,
+        unverified: entries.filter((e) => e.cardType === 'quote' && !e.verified).length,
+        noLocator: entries.filter((e) => !e.locator).length
+      };
+    } catch (err) {
+      logError('citations', err);
+      return { ok: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('citations:saveDossier', (_e, bookId, html) => {
+    try {
+      const out = path.join(libraryDir, bookId, 'fact-check.html');
+      fs.writeFileSync(out, html);
+      return out;
+    } catch (err) {
+      logError('citations', err);
+      return null;
     }
   });
 
