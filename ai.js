@@ -178,7 +178,7 @@ function grams(words, n) {
   return out;
 }
 
-function registerAI({ ipcMain, app, safeStorage, libraryDir, readJSON, logError }) {
+function registerAI({ ipcMain, app, safeStorage, libraryDir, readJSON, writeJSON, logError }) {
   // userData, never the library — the library is synced to iCloud.
   const keyFile = () => path.join(app.getPath('userData'), 'anthropic.key');
 
@@ -356,6 +356,104 @@ it, leave it empty rather than inferring it.`,
     } catch (err) {
       logError('ai', err);
       return { ok: false, error: err.message || 'lookup failed' };
+    }
+  });
+
+  // OCR a scan that has no text layer. Two things make this different from
+  // every other extraction: it goes off the machine, so a confidential source
+  // is refused outright; and it is a *transcription*, so anything captured
+  // from it is marked unverified rather than trusted like real extracted text.
+  ipcMain.handle('ai:ocr', async (_e, sourceId, versionId) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    try {
+      const srcDir = path.join(libraryDir, 'sources', sourceId);
+      const src = readJSON(path.join(srcDir, 'source.json'), null);
+      if (!src) return { ok: false, error: 'source not found' };
+
+      // The wall, stated plainly rather than worked around.
+      if (src.confidential) {
+        return {
+          ok: false,
+          error: 'This source is marked confidential, so it never leaves the machine. ' +
+                 'Open the file in Preview and use macOS Live Text to select and copy the text by hand.'
+        };
+      }
+
+      let file = src.file;
+      if (versionId) {
+        const v = ((src.document && src.document.versions) || []).find((x) => x.id === versionId);
+        if (v && v.file) file = v.file;
+      }
+      if (!file) return { ok: false, error: 'no document attached to this source' };
+
+      const full = path.join(srcDir, file);
+      const bytes = fs.statSync(full).size;
+      if (bytes > 24 * 1024 * 1024) {
+        return { ok: false, error: `that file is ${Math.round(bytes / 1e6)} MB — too large to send. Split it and OCR a part at a time.` };
+      }
+
+      const ext = path.extname(full).toLowerCase();
+      const data = fs.readFileSync(full).toString('base64');
+      const block = ext === '.pdf'
+        ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } }
+        : {
+            type: 'image',
+            source: {
+              type: 'base64',
+              media_type: ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg',
+              data
+            }
+          };
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 32000,
+        system: `You transcribe scanned documents. Reproduce the text as printed,
+in reading order, preserving paragraph breaks and any section or article
+numbering.
+
+Transcribe only what is legible. Where a word or passage cannot be read, write
+[illegible] rather than guessing at it — a plausible guess in a document
+somebody will later quote is worse than an obvious hole. Do not correct
+spelling, modernise language, summarise, or add anything of your own.
+
+Mark page boundaries as a line reading --- page N --- when page numbers are
+visible on the scan.`,
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'low' },
+        messages: [{ role: 'user', content: [block, { type: 'text', text: 'Transcribe this document.' }] }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const text = res.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+      if (!text) return { ok: false, error: 'nothing legible came back' };
+
+      const out = full.replace(/\.[^.]+$/, '') + '.extracted.txt';
+      fs.writeFileSync(out, text);
+
+      // Record that this text is a transcription, so captures from it are
+      // never treated as verified against the original.
+      src.ocr = true;
+      src.textFile = path.basename(out);
+      writeJSON(path.join(srcDir, 'source.json'), src);
+
+      const illegible = (text.match(/\[illegible\]/g) || []).length;
+      logOutput(libraryDir, 'ocr', text.slice(0, 400));
+      return {
+        ok: true,
+        chars: text.length,
+        illegible,
+        truncated: res.stop_reason === 'max_tokens',
+        preview: text.slice(0, 400)
+      };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'OCR failed' };
     }
   });
 

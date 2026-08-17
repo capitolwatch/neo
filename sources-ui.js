@@ -260,6 +260,7 @@
       <div id="src-books" style="margin:12px 0"></div>
       <div style="margin:14px 0 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button id="src-attach" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;color:#aaa;font-size:12px">Attach document…</button>
+        <button id="src-ocr" style="background:none;border:1px solid #3a4a52;border-radius:6px;padding:6px 12px;color:#9fc0cf;font-size:12px">OCR a scan</button>
         <span id="src-file" style="font-size:11px;color:#777">${editing.file ? esc(editing.file) + ' · ' + esc(String(editing.sha256).slice(0, 12)) : 'no file pinned'}</span>
       </div>
       <div id="src-problems" style="margin-top:12px"></div>`;
@@ -290,6 +291,21 @@
               ${cited ? `<span style="font-size:10px;color:#6b9c86">cited by ${cited.cards} card${cited.cards === 1 ? '' : 's'}</span>` : ''}
             </label>`;
         }).join('')}`;
+    });
+
+    const ocrBtn = backdrop.querySelector('#src-ocr');
+    if (ocrBtn) ocrBtn.addEventListener('click', async () => {
+      ocrBtn.disabled = true; ocrBtn.textContent = 'Reading the scan…';
+      const r = await neo.ai.ocr(editing.id, '');
+      ocrBtn.disabled = false; ocrBtn.textContent = 'OCR a scan';
+      const host = backdrop.querySelector('#src-lookup-out');
+      if (!r.ok) { host.innerHTML = `<div style="border-left:3px solid #7a6a3a;background:#25220f;padding:9px 12px;font-size:12px;color:#d8cfae">${esc(r.error)}</div>`; return; }
+      editing.ocr = true;
+      host.innerHTML = `<div style="border-left:3px solid #4d6b7a;background:#1b2429;padding:9px 12px">
+        <div style="font-size:11px;color:#9fc0cf">Transcribed ${r.chars.toLocaleString()} characters${r.illegible ? ` · ${r.illegible} marked [illegible]` : ''}${r.truncated ? ' · hit the length limit, some of the document is missing' : ''}.</div>
+        <div style="font-size:11px;color:#c9a96b;margin-top:4px">This is a transcription, not the document. Quotes captured from it stay unverified until you check them against the original.</div>
+        <div style="font-size:11px;color:#6d777c;margin-top:6px;font-style:italic">${esc(r.preview)}…</div>
+      </div>`;
     });
 
     backdrop.querySelector('#src-lookup-go').addEventListener('click', lookup);

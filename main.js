@@ -877,6 +877,7 @@ require('./ai').registerAI({
   safeStorage: require('electron').safeStorage,
   libraryDir: LIBRARY_DIR,
   readJSON,
+  writeJSON,
   logError
 });
 

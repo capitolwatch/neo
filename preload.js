@@ -53,7 +53,8 @@ contextBridge.exposeInMainWorld('neo', {
     consistency: (bookId) => ipcRenderer.invoke('ai:consistency', bookId),
     hostileReview: (bookId, chapterId) => ipcRenderer.invoke('ai:hostileReview', bookId, chapterId),
     lineEdit: (passage) => ipcRenderer.invoke('ai:lineEdit', passage),
-    interviewPrep: (bookId, about) => ipcRenderer.invoke('ai:interviewPrep', bookId, about)
+    interviewPrep: (bookId, about) => ipcRenderer.invoke('ai:interviewPrep', bookId, about),
+    ocr: (sourceId, versionId) => ipcRenderer.invoke('ai:ocr', sourceId, versionId)
   },
 
   submission: {

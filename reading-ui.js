@@ -117,7 +117,7 @@
       <div style="min-width:0">
         <h2 style="font-size:15px;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</h2>
         <div style="font-size:11px;color:#777;margin-top:2px">
-          ${state.paged ? `${state.pages.length} pages` : 'continuous text'}
+          ${state.paged ? `${state.pages.length} pages` : 'continuous text'}${state.source.ocr ? ' · OCR transcription — captures stay unverified' : ''}
           ${s.pageOffset ? ` · printed page = PDF page − ${s.pageOffset}` : ''}
         </div>
       </div>
@@ -229,7 +229,9 @@
     // Captured from the document itself, so it is verified by construction —
     // no draft step, and it locks the moment it saves.
     card.text = text.replace(/\s+/g, ' ').trim();
-    card.verified = true;
+    // Text that came from OCR is a transcription of the document, not the
+    // document. A quote from it has to be checked against the original.
+    card.verified = !state.source.ocr;
 
     const locator = prompt(
       state.paged
