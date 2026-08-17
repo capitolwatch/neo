@@ -449,6 +449,21 @@ async function dailyBackup() {
     walk(LIBRARY_DIR, '');
     fs.writeFileSync(target, await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' }));
 
+    // Off-machine copy. iCloud belongs on the backups, never on the live
+    // library — an editor rewriting files every few seconds turns every save
+    // into a sync operation and the whole app goes sluggish.
+    try {
+      const cloud = path.join(os.homedir(), 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'NEO Backups');
+      if (fs.existsSync(path.dirname(cloud))) {
+        if (!fs.existsSync(cloud)) fs.mkdirSync(cloud, { recursive: true });
+        fs.copyFileSync(target, path.join(cloud, path.basename(target)));
+        const off = fs.readdirSync(cloud).filter((f) => f.startsWith('neo-backup-')).sort();
+        while (off.length > 30) fs.unlinkSync(path.join(cloud, off.shift()));
+      }
+    } catch (err) {
+      logError('backup', err);   // never let the off-machine copy break the local one
+    }
+
     // prune old backups
     const backups = fs.readdirSync(backupsDir).filter((f) => f.startsWith('neo-backup-')).sort();
     while (backups.length > 14) fs.unlinkSync(path.join(backupsDir, backups.shift()));

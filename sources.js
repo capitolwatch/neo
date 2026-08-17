@@ -35,6 +35,11 @@ function blankSource(family) {
     author: '',            // may be an agency or body, not a person
     retrieved: now.slice(0, 10),
     confidential: false,
+    // Sources are library-wide so one can serve several books, but they still
+    // need to be findable by book. Two kinds of association: this explicit list
+    // (gathered for a book, maybe not cited yet) and the usage derived from
+    // cards, which is automatic and always true.
+    books: [],
     notes: '',
     file: null,            // filename within this source's folder
     sha256: null,
@@ -272,6 +277,31 @@ function registerSources({ ipcMain, dialog, shell, libraryDir, readJSON, writeJS
   });
 
   ipcMain.handle('sources:blank', (_e, family) => blankSource(FAMILIES.includes(family) ? family : 'book'));
+
+  // Which books actually use which sources. Derived from the cards rather than
+  // recorded, so it can't drift out of date and needs no upkeep.
+  ipcMain.handle('sources:usage', () => {
+    const out = { books: [], bySource: {} };
+    try {
+      const lib = readJSON(path.join(libraryDir, 'library.json'), null);
+      const ids = (lib && lib.shelves ? lib.shelves : []).flatMap((sh) => sh.bookIds || []);
+      for (const bookId of ids) {
+        const meta = readJSON(path.join(libraryDir, bookId, 'book.json'), null);
+        if (!meta) continue;
+        out.books.push({ id: bookId, title: meta.title || 'Untitled' });
+
+        const cards = readJSON(path.join(libraryDir, bookId, 'cards.json'), []) || [];
+        const counts = {};
+        for (const c of cards) if (c.sourceId) counts[c.sourceId] = (counts[c.sourceId] || 0) + 1;
+        for (const [srcId, n] of Object.entries(counts)) {
+          (out.bySource[srcId] = out.bySource[srcId] || []).push({ bookId, title: meta.title, cards: n });
+        }
+      }
+    } catch (err) {
+      logError('sources', err);
+    }
+    return out;
+  });
 
   ipcMain.handle('sources:blankVersion', () => newVersion());
 

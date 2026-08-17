@@ -73,6 +73,8 @@
   const esc = (s) => String(s == null ? '' : s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+  const currentBook = () => { try { return book; } catch { return null; } };
+
   let backdrop = null;
   let editing = null;   // the source currently open in the form
 
@@ -123,14 +125,49 @@
   // List
   // -------------------------------------------------------------------------
 
+  let scope = 'book';   // book | all | loose
+
   async function renderList() {
     editing = null;
-    const all = await neo.sources.list();
-    countEl().textContent = all.length ? `${all.length} source${all.length === 1 ? '' : 's'}` : '';
+    const everything = await neo.sources.list();
+    const usage = await neo.sources.usage();
+    const bk = currentBook();
+
+    const booksFor = (s) => {
+      const used = usage.bySource[s.id] || [];
+      const named = (s.books || [])
+        .filter((id) => !used.some((u) => u.bookId === id))
+        .map((id) => {
+          const b = usage.books.find((x) => x.id === id);
+          return b ? { bookId: id, title: b.title, cards: 0 } : null;
+        }).filter(Boolean);
+      return [...used, ...named];
+    };
+
+    const inThisBook = (s) => bk && booksFor(s).some((b) => b.bookId === bk.id);
+    const loose = (s) => booksFor(s).length === 0;
+
+    const all = everything.filter((s) =>
+      scope === 'all' ? true : scope === 'loose' ? loose(s) : inThisBook(s));
+
+    countEl().innerHTML = `
+      <span style="margin-right:10px">${all.length} of ${everything.length}</span>
+      <span id="src-scope" style="cursor:pointer">
+        ${['book', 'all', 'loose'].map((k) => `<span data-scope="${k}"
+          style="padding:2px 7px;border-radius:4px;${scope === k ? 'background:#2f3a34;color:#9fc0cf' : 'color:#777'}">
+          ${k === 'book' ? esc(bk ? bk.title : 'this book') : k === 'all' ? 'all books' : 'unassigned'}</span>`).join('')}
+      </span>`;
+    countEl().querySelectorAll('[data-scope]').forEach((el) => {
+      el.addEventListener('click', () => { scope = el.dataset.scope; renderList(); });
+    });
 
     if (!all.length) {
-      body().innerHTML = `<p style="color:#777;margin:24px 0">Nothing yet. Add the first source below —
-        the fields you fill in now are the ones you won't have to reconstruct later.</p>`;
+      body().innerHTML = scope === 'book'
+        ? `<p style="color:#777;margin:24px 0">No sources attached to this book yet. A source joins a book
+             when a card cites it — or open one and tick this book to claim it up front.
+             Try <b>all books</b> or <b>unassigned</b> above.</p>`
+        : `<p style="color:#777;margin:24px 0">Nothing yet. Add the first source below —
+             the fields you fill in now are the ones you won't have to reconstruct later.</p>`;
     } else {
       const rows = await Promise.all(all.map(async (s) => {
         const { citationBlockers } = await neo.sources.validate(s);
@@ -146,6 +183,7 @@
               <div style="min-width:0">
                 <div style="font-size:14px">${esc(s.title) || '<em style="color:#666">untitled</em>'}</div>
                 <div style="font-size:11px;color:#777">${esc(FAMILY_LABEL[s.family] || s.family)}${s.author ? ' · ' + esc(s.author) : ''}</div>
+              ${booksFor(s).map((b) => `<span style="display:inline-block;font-size:10px;color:#9fc0cf;background:#1f2a2f;border-radius:3px;padding:1px 6px;margin:4px 4px 0 0">${esc(b.title)}${b.cards ? ' · ' + b.cards : ''}</span>`).join('')}
               </div>
               ${flag}
             </div>
@@ -216,6 +254,7 @@
       ${field('pageOffset', 'Page offset', 'PDF page minus printed page, so locators come out right', 'text', editing.pageOffset)}
       ${field('notes', 'Notes', '', 'area', editing.notes)}
       ${field('confidential', 'Confidential — keep out of any cloud request', '', 'check', editing.confidential)}
+      <div id="src-books" style="margin:12px 0"></div>
       <div style="margin:14px 0 4px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button id="src-attach" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:6px 12px;color:#aaa;font-size:12px">Attach document…</button>
         <span id="src-file" style="font-size:11px;color:#777">${editing.file ? esc(editing.file) + ' · ' + esc(String(editing.sha256).slice(0, 12)) : 'no file pinned'}</span>
@@ -230,6 +269,25 @@
         renderForm(editing);
       });
     }
+
+    // Which books this source is for. Citing it from a card attaches it
+    // automatically; this is for sources gathered before any card exists.
+    neo.sources.usage().then((usage) => {
+      const host = backdrop.querySelector('#src-books');
+      if (!host || !usage.books.length) return;
+      const used = usage.bySource[editing.id] || [];
+      host.innerHTML = `
+        <div style="font-size:11px;color:#888;margin-bottom:5px">For which book</div>
+        ${usage.books.map((b) => {
+          const cited = used.find((u) => u.bookId === b.id);
+          const on = cited || (editing.books || []).includes(b.id);
+          return `<label style="display:flex;gap:8px;align-items:center;font-size:12px;color:#bbb;margin:4px 0">
+              <input type="checkbox" class="src-book" data-id="${esc(b.id)}" ${on ? 'checked' : ''} ${cited ? 'disabled' : ''}/>
+              ${esc(b.title)}
+              ${cited ? `<span style="font-size:10px;color:#6b9c86">cited by ${cited.cards} card${cited.cards === 1 ? '' : 's'}</span>` : ''}
+            </label>`;
+        }).join('')}`;
+    });
 
     backdrop.querySelector('#src-lookup-go').addEventListener('click', lookup);
     backdrop.querySelector('#src-lookup').addEventListener('keydown', (e) => {
@@ -330,6 +388,9 @@
     (FIELDS[editing.family] || []).forEach(([k]) => {
       const v = val(k); if (v !== undefined) f[k] = v;
     });
+
+    const boxes = backdrop.querySelectorAll('.src-book');
+    if (boxes.length) editing.books = [...boxes].filter((b) => b.checked).map((b) => b.dataset.id);
 
     if (editing.family === 'document') {
       backdrop.querySelectorAll('.v-eff').forEach((el) => { editing.document.versions[Number(el.dataset.i)].effectiveDate = el.value; });
@@ -452,6 +513,8 @@
         const s = await neo.sources.blank(fam);
         s.title = e.title; s.author = e.author;
         s.metadataSource = 'bibliography';
+        const bk = currentBook();
+        if (bk) s.books = [bk.id];   // imported while this book was open
         s.notes = `Imported from the works cited of ${res.file} on ${new Date().toISOString().slice(0, 10)}.\nUNVERIFIED — entry as printed:\n${e.raw}`;
         const f = s[fam];
         if ('publisher' in f) f.publisher = e.publisher || '';
