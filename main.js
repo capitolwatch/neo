@@ -645,6 +645,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'board' })
         },
         {
+          label: 'Find the Structure…',
+          click: () => sendToWindow({ type: 'findStructure' })
+        },
+        {
           label: 'Import Bibliography…',
           click: () => sendToWindow({ type: 'importBib' })
         },

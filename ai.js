@@ -359,6 +359,101 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // An imported paper arrives as one undifferentiated block, because NEO looks
+  // for page breaks and "Chapter N" headings and a paper has neither. This
+  // reads the text and proposes where the sections actually begin. It proposes
+  // only — the split happens when the author says so.
+  ipcMain.handle('ai:structure', async (_e, bookId) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    try {
+      const dir = path.join(libraryDir, bookId);
+      const meta = readJSON(path.join(dir, 'book.json'), null);
+      if (!meta) return { ok: false, error: 'could not read the book' };
+
+      const paras = [];
+      for (const chId of (meta.chapterOrder || [])) {
+        let html = '';
+        try { html = fs.readFileSync(path.join(dir, 'chapters', `${chId}.html`), 'utf8'); } catch { continue; }
+        for (const m of html.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+          const t = m[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+          if (t) paras.push(t);
+        }
+      }
+      if (paras.length < 4) return { ok: false, error: 'not enough text to find a structure in' };
+
+      // Numbered so the model can point at a paragraph rather than quote it —
+      // an index is unambiguous where a quoted phrase may repeat.
+      const numbered = paras.map((t, i) => `[${i}] ${t.slice(0, 300)}`).join('\n');
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 4000,
+        system: `You find the structure already present in a document. The author
+imported it and it arrived as one undivided block.
+
+Identify where its real divisions begin — abstract, introduction, named
+sections, conclusion, notes, works cited. Point at the paragraph index that
+STARTS each division. Use the document's own headings and wording for titles;
+do not invent titles it does not have, and do not reorganize it into a
+structure you think would be better. If the text has no clear divisions, return
+an empty list rather than imposing some.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'medium',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                sections: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      start: { type: 'integer', description: 'index of the paragraph that begins this section' },
+                      title: { type: 'string', description: "the document's own heading, or a short descriptive one" },
+                      kind: { type: 'string', description: 'abstract, section, subsection, notes, bibliography, other' }
+                    },
+                    required: ['start', 'title', 'kind'],
+                    additionalProperties: false
+                  }
+                },
+                note: { type: 'string', description: 'one sentence on what kind of document this is' }
+              },
+              required: ['sections', 'note'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{ role: 'user', content: `Document paragraphs:\n\n${numbered.slice(0, 200000)}` }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : null;
+      if (!parsed) return { ok: false, error: 'nothing came back' };
+
+      // Keep only sane, ascending, in-range boundaries.
+      const seen = new Set();
+      const sections = (parsed.sections || [])
+        .filter((s) => Number.isInteger(s.start) && s.start >= 0 && s.start < paras.length)
+        .filter((s) => (seen.has(s.start) ? false : seen.add(s.start)))
+        .sort((a, b) => a.start - b.start)
+        .map((s) => ({ ...s, preview: paras[s.start].slice(0, 110) }));
+
+      logOutput(libraryDir, 'structure', [parsed.note, ...sections.map((s) => s.title)].join(' '));
+      return { ok: true, sections, note: parsed.note, paragraphs: paras.length };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'structuring failed' };
+    }
+  });
+
   // A works-cited list is a set of sources someone already gathered. Parsing it
   // is restructuring text the author supplied — no lookup, nothing invented.
   // Entries arrive unverified: a bibliography entry is a *claim* about a work,

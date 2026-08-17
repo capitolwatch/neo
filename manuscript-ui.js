@@ -208,6 +208,114 @@
     done();
   }
 
-  neo.onMenu((msg) => { if (msg && msg.type === 'insertCard') openPalette(); });
+  // -------------------------------------------------------------------------
+  // Find the structure in an imported document
+  //
+  // A paper imports as one block because NEO looks for page breaks and
+  // "Chapter N". This proposes where the divisions already are, and splits
+  // only when told to. The originals are removed last, after the new chapters
+  // are safely on disk.
+  // -------------------------------------------------------------------------
+
+  async function findStructure() {
+    const bk = currentBook();
+    if (!bk) { alert('Open the book you want to restructure.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(720px,94vw);max-height:84vh;display:flex;flex-direction:column">
+        <h2 style="font-size:16px;margin:0 0 10px">Find the structure</h2>
+        <div id="st-body" style="flex:1;overflow:auto;font-size:13px;color:#999;line-height:1.6">Reading the document…</div>
+        <div style="display:flex;justify-content:space-between;margin-top:14px">
+          <button id="st-go" style="background:var(--accent);border:none;border-radius:6px;padding:7px 16px;color:#191919" disabled>Split into chapters</button>
+          <button id="st-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 16px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.querySelector('#st-x').addEventListener('click', shut);
+
+    const out = await neo.ai.structure(bk.id);
+    const host = bd.querySelector('#st-body');
+    if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+    if (!out.sections.length) {
+      host.innerHTML = `<span style="color:#999">No clear divisions found — the text reads as one continuous piece.</span>`;
+      return;
+    }
+
+    host.innerHTML = `
+      <div style="color:#bbb;margin-bottom:12px">${esc(out.note)} — ${out.sections.length} sections across ${out.paragraphs} paragraphs.</div>
+      ${out.sections.map((s, i) => `
+        <label style="display:flex;gap:9px;padding:9px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer">
+          <input type="checkbox" data-i="${i}" checked style="margin-top:4px"/>
+          <span style="min-width:0">
+            <span style="font-size:13px;color:#ddd">${esc(s.title)}</span>
+            <span style="font-size:10px;color:#5f6f66;margin-left:7px">${esc(s.kind)}</span>
+            <span style="display:block;font-size:11px;color:#777;margin-top:3px">¶${s.start} · ${esc(s.preview)}…</span>
+          </span>
+        </label>`).join('')}`;
+
+    const go = bd.querySelector('#st-go');
+    go.disabled = false;
+    go.addEventListener('click', async () => {
+      const picks = [...bd.querySelectorAll('input:checked')].map((c) => out.sections[Number(c.dataset.i)]);
+      if (!picks.length) return;
+      if (!confirm(
+        `Split this book into ${picks.length} chapters?\n\n` +
+        `Your text is not changed — it is redistributed across new chapters, and the originals are ` +
+        `removed only after the new ones are written. A backup zip sits in your library either way.`
+      )) return;
+      go.disabled = true;
+      go.textContent = 'Splitting…';
+      await applySplit(bk, picks);
+      shut();
+    });
+  }
+
+  async function applySplit(bk, sections) {
+    // Rebuild the paragraph list exactly as the main process saw it.
+    const paras = [];
+    for (const chId of (bk.chapterOrder || [])) {
+      const html = await neo.readChapter(bk.id, chId);
+      for (const m of String(html).matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)) {
+        if (m[1].replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').trim()) paras.push(m[0]);
+      }
+    }
+    if (!paras.length) { alert('No paragraphs found to split.'); return; }
+
+    const bounds = sections.map((s) => s.start).filter((n) => n < paras.length);
+    if (bounds[0] !== 0) bounds.unshift(0);   // whatever precedes the first heading is its own chapter
+
+    const oldIds = [...(bk.chapterOrder || [])];
+    const newIds = [];
+    const titles = {};
+
+    for (let i = 0; i < bounds.length; i++) {
+      const from = bounds[i];
+      const to = i + 1 < bounds.length ? bounds[i + 1] : paras.length;
+      const id = `ch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${i}`;
+      await neo.writeChapter(bk.id, id, paras.slice(from, to).join('\n'));
+      newIds.push(id);
+      const sec = sections.find((s) => s.start === from);
+      titles[id] = sec ? sec.title : 'Front matter';
+    }
+
+    // Only now is it safe to repoint the book and drop the originals.
+    bk.chapterOrder = newIds;
+    bk.chapterTitles = { ...(bk.chapterTitles || {}), ...titles };
+    await neo.writeBookMeta(bk.id, bk);
+    for (const id of oldIds) await neo.deleteChapter(bk.id, id);
+
+    if (typeof openBook === 'function') openBook(bk.id);   // re-render with the new structure
+  }
+
+  neo.onMenu((msg) => {
+    if (!msg) return;
+    if (msg.type === 'insertCard') openPalette();
+    if (msg.type === 'findStructure') findStructure();
+  });
   window.openCardPalette = openPalette;
+  window.findStructure = findStructure;
 })();

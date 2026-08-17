@@ -46,7 +46,8 @@ contextBridge.exposeInMainWorld('neo', {
     lookupSource: (query, family) => ipcRenderer.invoke('ai:lookupSource', query, family),
     audit: (bookId) => ipcRenderer.invoke('ai:audit', bookId),
     proseCheck: (bookId, n) => ipcRenderer.invoke('ai:proseCheck', bookId, n),
-    importBibliography: () => ipcRenderer.invoke('ai:importBibliography')
+    importBibliography: () => ipcRenderer.invoke('ai:importBibliography'),
+    structure: (bookId) => ipcRenderer.invoke('ai:structure', bookId)
   },
 
   board: {
