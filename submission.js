@@ -238,4 +238,97 @@ ${apparatus.notes.map((n, i) => `<w:endnote w:id="${i + 1}"><w:p><w:pPr><w:spaci
   });
 }
 
-module.exports = { registerSubmission };
+// What a file actually says about itself, and about you. Word, Pages and every
+// PDF writer stamp documents with an author name, an editing history, and
+// sometimes the tool that made them. Publishers open these files; so do people
+// you send them to. Worth knowing what is inside before it leaves.
+function registerMetadataAudit({ ipcMain, dialog, logError }) {
+  ipcMain.handle('metadata:audit', async () => {
+    const picked = await dialog.showOpenDialog({
+      title: 'Which file should I look inside?',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Documents', extensions: ['docx', 'pdf', 'epub', 'rtf', 'pages'] }]
+    });
+    if (picked.canceled || !picked.filePaths.length) return { ok: false, error: 'cancelled' };
+
+    const reports = [];
+    for (const fp of picked.filePaths.slice(0, 8)) {
+      const name = path.basename(fp);
+      const ext = path.extname(fp).toLowerCase();
+      const findings = [];
+      try {
+        if (ext === '.docx' || ext === '.epub' || ext === '.pages') {
+          const JSZip = require('jszip');
+          const zip = await JSZip.loadAsync(fs.readFileSync(fp));
+
+          const core = zip.file('docProps/core.xml');
+          if (core) {
+            const xml = await core.async('string');
+            const grab = (tag) => {
+              const m = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`).exec(xml);
+              return m ? m[1].trim() : '';
+            };
+            const pairs = [
+              ['creator', 'author name'],
+              ['lastModifiedBy', 'last person to edit it'],
+              ['created', 'created'],
+              ['modified', 'last modified'],
+              ['revision', 'revision count'],
+              ['description', 'description'],
+              ['keywords', 'keywords']
+            ];
+            for (const [tag, label] of pairs) {
+              const v = grab(`dc:${tag}`) || grab(`cp:${tag}`) || grab(`dcterms:${tag}`);
+              if (v) findings.push({ what: label, value: v, sensitive: /creator|lastModifiedBy/.test(tag) });
+            }
+          }
+
+          const app = zip.file('docProps/app.xml');
+          if (app) {
+            const xml = await app.async('string');
+            const g = (t) => { const m = new RegExp(`<${t}>([\\s\\S]*?)</${t}>`).exec(xml); return m ? m[1].trim() : ''; };
+            if (g('Application')) findings.push({ what: 'written by', value: g('Application') + (g('AppVersion') ? ` ${g('AppVersion')}` : '') });
+            if (g('Company')) findings.push({ what: 'company', value: g('Company'), sensitive: true });
+            if (g('TotalTime')) findings.push({ what: 'total editing time (minutes)', value: g('TotalTime') });
+          }
+
+          // Tracked changes and comments survive far more often than people expect.
+          const doc = zip.file('word/document.xml');
+          if (doc) {
+            const xml = await doc.async('string');
+            const ins = (xml.match(/<w:ins /g) || []).length;
+            const del = (xml.match(/<w:del /g) || []).length;
+            if (ins || del) findings.push({ what: 'tracked changes still in the file', value: `${ins} insertions, ${del} deletions`, sensitive: true });
+          }
+          if (zip.file('word/comments.xml')) {
+            const xml = await zip.file('word/comments.xml').async('string');
+            const n = (xml.match(/<w:comment /g) || []).length;
+            if (n) findings.push({ what: 'comments still in the file', value: `${n}`, sensitive: true });
+          }
+        } else if (ext === '.pdf') {
+          // Read the trailer's Info dictionary without a PDF library.
+          const raw = fs.readFileSync(fp, 'latin1');
+          for (const key of ['Author', 'Creator', 'Producer', 'Title', 'Subject', 'Keywords', 'CreationDate', 'ModDate']) {
+            const m = new RegExp(`/${key}\\s*\\(([^)]{0,200})\\)`).exec(raw);
+            if (m && m[1].trim()) {
+              findings.push({ what: key.toLowerCase(), value: m[1].trim(), sensitive: /Author|Creator/.test(key) });
+            }
+          }
+          if (/\/Type\s*\/Metadata/.test(raw)) findings.push({ what: 'XMP metadata block', value: 'present' });
+        } else if (ext === '.rtf') {
+          const raw = fs.readFileSync(fp, 'utf8').slice(0, 20000);
+          const m = /\\author\s+([^\\{}]{1,80})/.exec(raw);
+          if (m) findings.push({ what: 'author name', value: m[1].trim(), sensitive: true });
+          if (/\\revtbl|\\\*\\revtbl/.test(raw)) findings.push({ what: 'revision table', value: 'present', sensitive: true });
+        }
+      } catch (err) {
+        logError('metadata', err);
+        findings.push({ what: 'could not read', value: err.message });
+      }
+      reports.push({ file: name, findings });
+    }
+    return { ok: true, reports };
+  });
+}
+
+module.exports = { registerSubmission, registerMetadataAudit };

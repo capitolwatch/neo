@@ -58,7 +58,8 @@ contextBridge.exposeInMainWorld('neo', {
   },
 
   submission: {
-    export: (bookId) => ipcRenderer.invoke('submission:export', bookId)
+    export: (bookId) => ipcRenderer.invoke('submission:export', bookId),
+    metadata: () => ipcRenderer.invoke('metadata:audit')
   },
 
   citations: {

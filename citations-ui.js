@@ -200,8 +200,44 @@
     );
   }
 
+  // What a file says about you before you send it anywhere.
+  async function openMetadata() {
+    const out = await neo.submission.metadata();
+    if (!out.ok) { if (out.error !== 'cancelled') alert(out.error); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(720px,94vw);max-height:86vh;display:flex;flex-direction:column">
+        <h2 style="font-size:16px;margin:0 0 4px">What's in this file</h2>
+        <p style="font-size:12px;color:#888;margin:0 0 12px">Everything a recipient can read out of it without opening the text.</p>
+        <div id="mx-body" style="flex:1;overflow:auto"></div>
+        <div style="text-align:right;margin-top:14px"><button id="mx-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 18px;color:#888">Close</button></div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#mx-x').addEventListener('click', shut);
+
+    bd.querySelector('#mx-body').innerHTML = out.reports.map((r) => `
+      <div style="border:1px solid #2c2c2c;border-radius:7px;padding:12px 14px;margin-bottom:10px">
+        <div style="font-size:13px;color:#ddd;margin-bottom:8px">${esc(r.file)}</div>
+        ${r.findings.length ? `<table style="width:100%;font-size:12px;border-collapse:collapse">
+          ${r.findings.map((f) => `<tr>
+            <td style="color:#6d777c;padding:3px 10px 3px 0;white-space:nowrap;vertical-align:top">${esc(f.what)}</td>
+            <td style="color:${f.sensitive ? '#c9a96b' : '#aab3b7'}">${esc(f.value)}</td></tr>`).join('')}
+        </table>` : `<div style="font-size:12px;color:#6b9c86">Nothing embedded — clean.</div>`}
+      </div>`).join('') +
+      `<div style="font-size:11px;color:#777;margin-top:6px;line-height:1.6">
+        Amber entries travel with the file: your name, your organisation, who last edited it, and any tracked
+        changes or comments still inside. In Word, File → Info → Inspect Document strips them. In Preview,
+        exporting to PDF afresh usually clears the old author field.</div>`;
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
+    if (msg.type === 'metadata') openMetadata();
     if (msg.type === 'submission') exportSubmission();
     if (msg.type === 'citations') open();
     if (msg.type === 'dossier') openDossier();
