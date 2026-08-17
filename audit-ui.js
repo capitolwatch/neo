@@ -171,11 +171,70 @@
         </div>`).join('')}`;
   }
 
+  // -------------------------------------------------------------------------
+  // What the board is missing
+  //
+  // Two halves, deliberately separated. How many sources hold up a theme is
+  // arithmetic and gets counted. What argument has nothing behind it is a
+  // judgement and gets asked — but only about the shape of missing evidence,
+  // never its content.
+  // -------------------------------------------------------------------------
+
+  async function openGaps() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(760px,94vw);max-height:86vh;display:flex;flex-direction:column">
+        <h2 style="font-size:16px;margin:0 0 12px">What's missing</h2>
+        <div id="gx-body" style="flex:1;overflow:auto;font-size:13px;color:#999;line-height:1.65">Reading the board…</div>
+        <div style="text-align:right;margin-top:14px">
+          <button id="gx-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 18px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#gx-x').addEventListener('click', shut);
+
+    const out = await neo.ai.gaps(bk.id);
+    const host = bd.querySelector('#gx-body');
+    if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+
+    const structural = (out.structural || []).length ? `
+      <h3 style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.09em;margin:0 0 9px">Counted from your board</h3>
+      ${out.structural.map((s) => `
+        <div style="border-left:3px solid #7a6a3a;background:#25220f;padding:9px 12px;margin-bottom:7px">
+          <div style="font-size:12px;color:#d8cfae"><b>${esc(s.theme)}</b> — ${esc(s.issue)}</div>
+        </div>`).join('')}` : '';
+
+    const conceptual = (out.conceptual || []).length ? `
+      <h3 style="font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.09em;margin:22px 0 9px">Arguments with nothing behind them</h3>
+      ${out.conceptual.map((g) => `
+        <div style="border-left:3px solid #4d6b7a;background:#1b2429;padding:10px 13px;margin-bottom:8px">
+          <div style="font-size:13px;color:#cfd8dd;margin-bottom:4px">${esc(g.missing)}</div>
+          <div style="font-size:12px;color:#93a5ad;margin-bottom:4px">${esc(g.why)}</div>
+          <div style="font-size:12px;color:#8fa89b">→ ${esc(g.evidence)}</div>
+        </div>`).join('')}` : '';
+
+    host.innerHTML =
+      (out.verdict ? `<div style="color:#bbb;margin-bottom:16px">${esc(out.verdict)}</div>` : '') +
+      (out.unfiled ? `<div style="font-size:12px;color:#8a7a5a;margin-bottom:14px">${out.unfiled} card${out.unfiled === 1 ? '' : 's'} still unfiled — a pile that doesn't fit anywhere is often a theme you haven't named yet.</div>` : '') +
+      structural + conceptual +
+      (!structural && !conceptual ? `<div style="color:#6b9c86">Nothing flagged. That means nothing visible from the board — it says nothing about evidence you haven't captured.</div>` : '') +
+      (out.note ? `<div style="font-size:11px;color:#777;margin-top:16px">${esc(out.note)}</div>` : '');
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
     if (msg.type === 'audit') openAudit();
     if (msg.type === 'proseCheck') openProseCheck();
+    if (msg.type === 'gaps') openGaps();
   });
+  window.openGaps = openGaps;
   window.openAudit = openAudit;
   window.openProseCheck = openProseCheck;
 })();

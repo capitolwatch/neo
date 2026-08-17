@@ -730,6 +730,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'dossier' })
         },
         {
+          label: "What's Missing…",
+          click: () => sendToWindow({ type: 'gaps' })
+        },
+        {
           label: 'Rigor Audit…',
           accelerator: 'CmdOrCtrl+Shift+A',
           click: () => sendToWindow({ type: 'audit' })

@@ -359,6 +359,113 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // What the board is missing. The structural half is counted, not guessed —
+  // how many sources hold up a theme is arithmetic, and a model has no business
+  // being asked. The model is used only for the conceptual half: which argument
+  // has no evidence against it.
+  ipcMain.handle('ai:gaps', async (_e, bookId) => {
+    try {
+      const dir = path.join(libraryDir, bookId);
+      const board = readJSON(path.join(dir, 'board.json'), { themes: [] }) || { themes: [] };
+      const cards = readJSON(path.join(dir, 'cards.json'), []) || [];
+      const srcCache = new Map();
+      const readSource = (id) => {
+        if (!id) return null;
+        if (!srcCache.has(id)) srcCache.set(id, readJSON(path.join(libraryDir, 'sources', id, 'source.json'), null));
+        return srcCache.get(id);
+      };
+
+      const themes = (board.themes || []).filter((t) => String(t.name || '').trim());
+      if (!themes.length && !cards.length) return { ok: false, error: 'nothing on the board yet' };
+
+      // Counted, not inferred.
+      const structural = [];
+      const digest = [];
+      for (const t of themes) {
+        const mine = cards.filter((c) => c.themeId === t.id);
+        const srcs = [...new Set(mine.map((c) => c.sourceId).filter(Boolean))].map(readSource).filter(Boolean);
+        const families = new Set(srcs.map((s) => s.family));
+        const primary = srcs.filter((s) => ['document', 'dataset', 'interview'].includes(s.family)).length;
+        const unver = mine.filter((c) => c.type === 'quote' && !c.verified).length;
+
+        if (!mine.length) structural.push({ theme: t.name, issue: 'no cards at all' });
+        else if (srcs.length === 1) structural.push({ theme: t.name, issue: `everything rests on one source — ${srcs[0].title}` });
+        else if (srcs.length && !primary) structural.push({ theme: t.name, issue: 'no primary documents — all of it is secondary' });
+        if (mine.length && mine.length < 3) structural.push({ theme: t.name, issue: `only ${mine.length} card${mine.length === 1 ? '' : 's'} behind it` });
+        if (unver) structural.push({ theme: t.name, issue: `${unver} quote${unver === 1 ? '' : 's'} never verified` });
+
+        digest.push({
+          theme: t.name,
+          chapter: t.chapter || '',
+          cards: mine.length,
+          sourceKinds: [...families],
+          gist: mine.slice(0, 8).map((c) => (c.text || c.draftText || c.note || '').slice(0, 140))
+        });
+      }
+
+      const unfiled = cards.filter((c) => !c.themeId);
+
+      const key = readKey();
+      if (!key) return { ok: true, structural, conceptual: [], unfiled: unfiled.length, note: 'no API key — structural findings only' };
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 3000,
+        system: `You review the evidence an author has gathered for a policy book
+and say what is missing. You see only their themes and the gist of their cards.
+
+Name arguments a hostile reader would expect to see addressed and that have no
+evidence behind them — the competing explanation, the obvious objection, the
+counterexample. Say what KIND of evidence would answer it.
+
+You do not know the subject better than the author. Do not assert facts about
+Oklahoma, tax policy, or anything else, and do not name specific sources,
+statutes or figures — describe the shape of the missing evidence, not its
+content. If the board looks well covered, say so rather than inventing gaps.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'medium',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                gaps: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      missing: { type: 'string', description: 'the argument or objection with nothing behind it' },
+                      why: { type: 'string', description: 'why a reader would expect it addressed' },
+                      evidence: { type: 'string', description: 'the kind of evidence that would answer it' }
+                    },
+                    required: ['missing', 'why', 'evidence'],
+                    additionalProperties: false
+                  }
+                },
+                verdict: { type: 'string' }
+              },
+              required: ['gaps', 'verdict'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{ role: 'user', content: `Themes and the evidence behind them:\n${JSON.stringify(digest, null, 1)}\n\nUnfiled cards: ${unfiled.length}` }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: true, structural, conceptual: [], unfiled: unfiled.length, note: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : { gaps: [], verdict: '' };
+      logOutput(libraryDir, 'gaps', [parsed.verdict, ...(parsed.gaps || []).map((g) => g.missing + ' ' + g.why)].join(' '));
+      return { ok: true, structural, conceptual: parsed.gaps || [], verdict: parsed.verdict, unfiled: unfiled.length };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'gap analysis failed' };
+    }
+  });
+
   // An imported paper arrives as one undifferentiated block, because NEO looks
   // for page breaks and "Chapter N" headings and a paper has neither. This
   // reads the text and proposes where the sections actually begin. It proposes
