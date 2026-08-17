@@ -439,6 +439,64 @@ process.on('unhandledRejection', (err) => logError('main-promise', err));
 ipcMain.handle('log:error', (_e, msg) => logError('renderer', msg));
 
 // One zip of the whole library per day, keeping the last 14. Cheap insurance.
+// ---------------------------------------------------------------------------
+// Authorship snapshots
+//
+// A dated, fingerprinted record that the manuscript accumulated over months.
+// This is the answer to an authorship challenge that a promise can never be:
+// here is the chapter at fourteen points across a year, each with the SHA-256
+// of its text at that moment. Weekly, automatic, and it never overwrites.
+// ---------------------------------------------------------------------------
+
+function weeklySnapshot() {
+  try {
+    ensureLibrary();
+    const dir = path.join(LIBRARY_DIR, 'Snapshots');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+    const week = (() => {
+      const d = new Date();
+      const jan1 = new Date(d.getFullYear(), 0, 1);
+      const n = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+      return `${d.getFullYear()}-W${String(n).padStart(2, '0')}`;
+    })();
+
+    const target = path.join(dir, `snapshot-${week}.json`);
+    if (fs.existsSync(target)) return;   // one per week, never overwritten
+
+    const crypto = require('crypto');
+    const books = [];
+    for (const name of fs.readdirSync(LIBRARY_DIR)) {
+      if (!name.startsWith('book-')) continue;
+      const meta = readJSON(path.join(LIBRARY_DIR, name, 'book.json'), null);
+      if (!meta) continue;
+
+      const chapters = [];
+      let words = 0;
+      for (const chId of (meta.chapterOrder || [])) {
+        let html = '';
+        try { html = fs.readFileSync(path.join(LIBRARY_DIR, name, 'chapters', `${chId}.html`), 'utf8'); } catch { continue; }
+        const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        const n = text ? text.split(' ').length : 0;
+        words += n;
+        chapters.push({
+          id: chId,
+          title: (meta.chapterTitles && meta.chapterTitles[chId]) || '',
+          words: n,
+          // The fingerprint is of the TEXT, not the HTML: reformatting the
+          // page must not look like the words changed.
+          sha256: crypto.createHash('sha256').update(text).digest('hex')
+        });
+      }
+      books.push({ id: name, title: meta.title || 'Untitled', words, chapters });
+    }
+
+    writeJSON(target, { taken: new Date().toISOString(), week, books });
+  } catch (err) {
+    logError('snapshot', err);
+  }
+}
+
 // Newest mtime anywhere in the library, ignoring the backups themselves.
 // Used to decide whether today's zip is stale rather than merely present.
 function libraryTouchedAt(dir, rel = '') {
@@ -816,8 +874,10 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   dailyBackup();
+  weeklySnapshot();
   // A day's writing shouldn't ride on one backup taken at launch.
   setInterval(dailyBackup, 2 * 60 * 60 * 1000);
+  setInterval(weeklySnapshot, 6 * 60 * 60 * 1000);   // catches a week rolling over mid-session
   checkForUpdates();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

@@ -68,6 +68,7 @@
           <div style="display:flex;gap:8px">
             <button id="cb-add-card" style="background:var(--accent);border:none;border-radius:6px;padding:7px 14px;color:#191919">+ Card</button>
             <button id="cb-add-theme" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 14px;color:#aaa">+ Theme</button>
+            <button id="cb-outline" style="background:none;border:1px solid #3a4a52;border-radius:6px;padding:7px 14px;color:#9fc0cf">Send themes to the outline</button>
           </div>
           <button id="cb-close" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 18px;color:#888">Close</button>
         </div>
@@ -76,6 +77,7 @@
     backdrop.querySelector('#cb-close').addEventListener('click', close);
     backdrop.querySelector('#cb-add-theme').addEventListener('click', addTheme);
     backdrop.querySelector('#cb-add-card').addEventListener('click', () => editCard(null));
+    backdrop.querySelector('#cb-outline').addEventListener('click', promoteToOutline);
     releaseBoardKeys = dismissible(backdrop, close);
 
     await reload();
@@ -218,6 +220,67 @@
       await neo.cards.save(bk.id, target[i]);
     }
     await reload();
+  }
+
+  // -------------------------------------------------------------------------
+  // Themes to the outline
+  //
+  // The payoff of sorting cards. NEO's outline lives on the book as
+  // chapterNotes and sectionNotes, and section notes already appear in the
+  // manuscript as grey ghost paragraphs you draft over. So an arrangement of
+  // piles becomes the scaffold you write into.
+  //
+  // Only ever appends. Existing chapters are never touched or reordered.
+  // -------------------------------------------------------------------------
+
+  async function promoteToOutline() {
+    const bk = currentBook();
+    const named = boardData.themes.filter((t) => String(t.name || '').trim());
+    if (!named.length) { alert('Name some piles first — an unnamed pile has nothing to call a section.'); return; }
+
+    // Themes carrying the same chapter become sections of one chapter.
+    // A theme with no chapter becomes a chapter in its own right.
+    const groups = new Map();
+    for (const t of named) {
+      const key = String(t.chapter || '').trim() || ` ${t.id}`;
+      if (!groups.has(key)) groups.set(key, { chapter: String(t.chapter || '').trim() || t.name, themes: [] });
+      groups.get(key).themes.push(t);
+    }
+
+    const plan = [...groups.values()];
+    const lines = plan.map((g) =>
+      `  ${g.chapter}` + (g.themes.length > 1 || g.themes[0].name !== g.chapter
+        ? '\n' + g.themes.map((t) => `      · ${t.name} (${cards.filter((c) => c.themeId === t.id).length} cards)`).join('\n')
+        : '')).join('\n');
+
+    if (!confirm(
+      `Add ${plan.length} chapter${plan.length === 1 ? '' : 's'} to the outline?\n\n${lines}\n\n` +
+      `Existing chapters are left exactly as they are — this only appends.`
+    )) return;
+
+    bk.chapterNotes = bk.chapterNotes || {};
+    bk.sectionNotes = bk.sectionNotes || {};
+    bk.chapterOrder = bk.chapterOrder || [];
+
+    for (const g of plan) {
+      const chId = `ch-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      await neo.writeChapter(bk.id, chId, '<p><br></p>');
+      bk.chapterOrder.push(chId);
+      bk.chapterNotes[chId] = g.chapter;
+      // One section per theme, unless the chapter simply is the theme.
+      bk.sectionNotes[chId] = (g.themes.length === 1 && g.themes[0].name === g.chapter)
+        ? []
+        : g.themes.map((t) => ({
+            id: `sec-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+            text: t.name
+          }));
+    }
+
+    // Mutate the object app.js holds — its saveMeta writes `book` wholesale.
+    await neo.writeBookMeta(bk.id, bk);
+    close();
+    if (typeof openBook === 'function') openBook(bk.id);
+    setTimeout(() => alert('Added to the outline. Open the Outline tab — section notes appear in the manuscript as ghost paragraphs you write over.'), 300);
   }
 
   async function addTheme() {
