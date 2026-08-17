@@ -734,6 +734,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'dossier' })
         },
         {
+          label: 'Before the Interview…',
+          click: () => sendToWindow({ type: 'interviewPrep' })
+        },
+        {
           label: 'Line Notes on the Selection…',
           accelerator: 'CmdOrCtrl+Shift+L',
           click: () => sendToWindow({ type: 'lineEdit' })

@@ -362,8 +362,60 @@
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Interview preparation
+  // -------------------------------------------------------------------------
+
+  async function openInterviewPrep() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(760px,94vw);max-height:88vh;display:flex;flex-direction:column">
+        <h2 style="font-size:16px;margin:0 0 4px">Before the interview</h2>
+        <p style="font-size:12px;color:#888;margin:0 0 12px">Questions aimed at what your documents can't answer.
+          Say who you're seeing — a role is enough, and don't type a real name if they're confidential.</p>
+        <input id="ip-who" type="text" placeholder="e.g. a county assessor who served through the 1990s" style="width:100%"/>
+        <div id="ip-body" style="flex:1;overflow:auto;margin:14px 0;font-size:13px;color:#999;line-height:1.65"></div>
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <button id="ip-go" style="background:var(--accent);border:none;border-radius:6px;padding:7px 16px;color:#191919">Draft questions</button>
+          <button id="ip-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 16px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#ip-x').addEventListener('click', shut);
+
+    bd.querySelector('#ip-go').addEventListener('click', async () => {
+      const btn = bd.querySelector('#ip-go');
+      const host = bd.querySelector('#ip-body');
+      btn.disabled = true; btn.textContent = 'Reading your evidence…';
+      const out = await neo.ai.interviewPrep(bk.id, bd.querySelector('#ip-who').value);
+      btn.disabled = false; btn.textContent = 'Again';
+      if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+
+      host.innerHTML =
+        (out.withheld ? `<div style="font-size:11px;color:#8a7a5a;margin-bottom:12px">${out.withheld} card${out.withheld === 1 ? '' : 's'} from confidential sources were withheld and not read.</div>` : '') +
+        out.questions.map((q, i) => `
+          <div style="border-left:3px solid ${q.sensitive ? '#7a6a3a' : '#3a4a52'};background:${q.sensitive ? '#25220f' : '#1b2429'};padding:11px 14px;margin-bottom:9px">
+            <div style="font-size:13px;color:#dbe2e5;margin-bottom:5px">${i + 1}. ${esc(q.question)}</div>
+            <div style="font-size:11px;color:#93a5ad">${esc(q.why)}</div>
+            ${q.sensitive ? `<div style="font-size:11px;color:#c9a96b;margin-top:5px">Contentious — put it plainly and give them room to answer. This is right-of-reply territory.</div>` : ''}
+          </div>`).join('') +
+        (out.cannotAnswer ? `<div style="font-size:12px;color:#777;margin-top:12px">Probably can't help with: ${esc(out.cannotAnswer)}</div>` : '') +
+        `<div style="font-size:11px;color:#666;margin-top:14px;padding-top:10px;border-top:1px solid #2a2a2a">
+          Before you dial: start recording, then ask for consent on tape. Agree the terms out loud — on record, on
+          background, not for attribution — and note when they were agreed. All of it goes on the interview source record.</div>`;
+    });
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
+    if (msg.type === 'interviewPrep') openInterviewPrep();
     if (msg.type === 'hostile') openHostile();
     if (msg.type === 'audit') openAudit();
     if (msg.type === 'proseCheck') openProseCheck();
@@ -372,6 +424,7 @@
   });
   window.openConsistency = openConsistency;
   window.openHostile = openHostile;
+  window.openInterviewPrep = openInterviewPrep;
   window.openGaps = openGaps;
   window.openAudit = openAudit;
   window.openProseCheck = openProseCheck;

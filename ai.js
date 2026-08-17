@@ -359,6 +359,103 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // Turn research gaps into questions for a person. What documents cannot
+  // answer is where an interview earns its place — and knowing that before you
+  // sit down is the difference between an interview and a chat.
+  ipcMain.handle('ai:interviewPrep', async (_e, bookId, about) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    try {
+      const dir = path.join(libraryDir, bookId);
+      const board = readJSON(path.join(dir, 'board.json'), { themes: [] }) || { themes: [] };
+      const cards = readJSON(path.join(dir, 'cards.json'), []) || [];
+
+      // Only non-confidential material goes out, and only the gist.
+      const evidence = [];
+      let withheld = 0;
+      for (const c of cards) {
+        const s = c.sourceId ? readJSON(path.join(libraryDir, 'sources', c.sourceId, 'source.json'), null) : null;
+        if (s && s.confidential) { withheld++; continue; }
+        const theme = (board.themes || []).find((t) => t.id === c.themeId);
+        evidence.push({
+          theme: theme ? theme.name : 'unfiled',
+          kind: s ? s.family : 'none',
+          gist: (c.text || c.draftText || c.note || '').slice(0, 180)
+        });
+      }
+      if (!evidence.length) return { ok: false, error: 'no cards yet — there is nothing to find gaps in' };
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 4000,
+        system: `You prepare a journalist for an interview. She has documentary
+evidence already; your job is to find what documents cannot tell her and turn
+that into questions.
+
+Favour questions about: decision-making and who was in the room, what was
+considered and rejected, what the record omits, how a rule worked in practice
+versus on paper, and what the subject expected to happen versus what did. Avoid
+questions whose answers she already has on a card, and avoid anything a
+document would settle better than a person.
+
+Write open questions in her voice, not leading ones. For anything contentious,
+note that it should be put plainly and the subject given room to answer.
+
+You do not know the subject matter beyond what is listed. Never assert a fact,
+name a person, or supply a figure — if a question needs a specific, write it as
+a blank for her to fill in.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'medium',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                questions: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      question: { type: 'string' },
+                      why: { type: 'string', description: 'the gap in the documentary record it fills' },
+                      sensitive: { type: 'boolean', description: 'true if this needs right-of-reply care' }
+                    },
+                    required: ['question', 'why', 'sensitive'],
+                    additionalProperties: false
+                  }
+                },
+                cannotAnswer: { type: 'string', description: 'what this subject probably cannot help with' }
+              },
+              required: ['questions', 'cannotAnswer'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{
+          role: 'user',
+          content: `Who she is interviewing: ${String(about || 'not specified').slice(0, 400)}\n\n` +
+                   `Evidence already gathered:\n${JSON.stringify(evidence.slice(0, 300), null, 1)}`
+        }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : null;
+      if (!parsed) return { ok: false, error: 'nothing came back' };
+      logOutput(libraryDir, 'interview-prep',
+        [parsed.cannotAnswer, ...(parsed.questions || []).map((q) => q.question + ' ' + q.why)].join(' '));
+      return { ok: true, questions: parsed.questions || [], cannotAnswer: parsed.cannotAnswer, withheld };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'preparation failed' };
+    }
+  });
+
   // Line editing on a passage the author selected. Suggestions only — they
   // land in a panel, never in the page, and the author retypes what she agrees
   // with. That friction is the whole guarantee that the prose stays hers.
