@@ -50,7 +50,8 @@ contextBridge.exposeInMainWorld('neo', {
     structure: (bookId) => ipcRenderer.invoke('ai:structure', bookId),
     gaps: (bookId) => ipcRenderer.invoke('ai:gaps', bookId),
     copyrightPage: () => ipcRenderer.invoke('ai:copyrightPage'),
-    consistency: (bookId) => ipcRenderer.invoke('ai:consistency', bookId)
+    consistency: (bookId) => ipcRenderer.invoke('ai:consistency', bookId),
+    hostileReview: (bookId, chapterId) => ipcRenderer.invoke('ai:hostileReview', bookId, chapterId)
   },
 
   submission: {

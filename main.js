@@ -734,6 +734,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'dossier' })
         },
         {
+          label: 'The Unconvinced Reader…',
+          click: () => sendToWindow({ type: 'hostile' })
+        },
+        {
           label: 'Figures That Disagree…',
           click: () => sendToWindow({ type: 'consistency' })
         },

@@ -278,14 +278,100 @@
       `<div style="color:#777;font-size:12px;margin-top:10px">Which figure is right is yours to determine — this only shows that two of them disagree.</div>`;
   }
 
+  // -------------------------------------------------------------------------
+  // The hostile reviewer
+  //
+  // The audit asks whether a claim is supported. This asks whether the
+  // reasoning holds — the thing provenance can never settle, and the first
+  // place a reviewer goes when a book argues that one policy caused an outcome.
+  // -------------------------------------------------------------------------
+
+  const FORCE = {
+    fatal:   { label: 'Fatal',   color: '#a05548', bg: '#2a1d1a', text: '#ddc4bd' },
+    serious: { label: 'Serious', color: '#7a6a3a', bg: '#25220f', text: '#d8cfae' },
+    minor:   { label: 'Minor',   color: '#4d6b7a', bg: '#1b2429', text: '#cfd8dd' }
+  };
+
+  async function openHostile() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(800px,95vw);max-height:88vh;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <h2 style="font-size:16px;margin:0">The unconvinced reader</h2>
+          <select id="hx-chapter" style="max-width:280px"></select>
+        </div>
+        <div id="hx-body" style="flex:1;overflow:auto;margin:14px 0;font-size:13px;color:#999;line-height:1.65"></div>
+        <div style="display:flex;justify-content:space-between;gap:10px">
+          <button id="hx-go" style="background:var(--accent);border:none;border-radius:6px;padding:7px 16px;color:#191919">Have at it</button>
+          <button id="hx-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 16px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#hx-x').addEventListener('click', shut);
+
+    const sel = bd.querySelector('#hx-chapter');
+    sel.innerHTML = `<option value="">the whole book</option>` +
+      (bk.chapterOrder || []).map((id, i) => {
+        const t = (bk.chapterTitles && bk.chapterTitles[id]) || (bk.chapterNotes && bk.chapterNotes[id]) || '';
+        return `<option value="${id}">${i + 1}. ${esc(t || 'untitled')}</option>`;
+      }).join('');
+
+    bd.querySelector('#hx-body').innerHTML = `
+      <p style="color:#999;margin:0 0 10px">A public-finance economist who isn't convinced, reading for weak points —
+      causal claims the evidence can't carry, alternative explanations you haven't addressed, cases that look chosen
+      because they fit, magnitudes that might not survive their own uncertainty.</p>
+      <p style="color:#777;font-size:12px;margin:0">It knows nothing about Oklahoma beyond your text and is barred from
+      asserting any fact, figure or source of its own. It attacks what's on the page and says what would answer it.
+      This is the one thing provenance can't do for you.</p>`;
+
+    bd.querySelector('#hx-go').addEventListener('click', async () => {
+      const btn = bd.querySelector('#hx-go');
+      btn.disabled = true; btn.textContent = 'Reading closely…';
+      const host = bd.querySelector('#hx-body');
+      host.innerHTML = `<div style="color:#777">Thinking hard about this one — it runs at high effort.</div>`;
+
+      const out = await neo.ai.hostileReview(bk.id, sel.value || null);
+      btn.disabled = false; btn.textContent = 'Again';
+      if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+
+      host.innerHTML =
+        (out.verdict ? `<div style="color:#bbb;margin-bottom:14px">${esc(out.verdict)}</div>` : '') +
+        (out.strongest ? `<div style="border-left:3px solid #4f7a5f;background:#16231b;padding:10px 13px;margin-bottom:14px">
+            <div style="font-size:10px;color:#7fae8c;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Holds up best</div>
+            <div style="font-size:12px;color:#c3d6c8">${esc(out.strongest)}</div>
+          </div>` : '') +
+        (out.challenges.length ? out.challenges.map((c) => {
+          const f = FORCE[c.force] || FORCE.minor;
+          return `<div style="border-left:3px solid ${f.color};background:${f.bg};padding:11px 14px;margin-bottom:9px">
+            <div style="display:flex;justify-content:space-between;gap:10px;margin-bottom:6px">
+              <span style="font-size:10px;color:${f.color};text-transform:uppercase;letter-spacing:.09em;font-weight:600">${esc(f.label)}</span>
+              <span style="font-size:10px;color:#777">${esc(c.kind)}</span>
+            </div>
+            <div style="font-size:12px;color:${f.text};font-style:italic;margin-bottom:7px">“${esc(c.passage)}”</div>
+            <div style="font-size:12px;color:#aaa;line-height:1.55;margin-bottom:5px">${esc(c.objection)}</div>
+            <div style="font-size:12px;color:#8fa89b;line-height:1.55">→ ${esc(c.answer)}</div>
+          </div>`;
+        }).join('') : `<div style="color:#6b9c86">No objections raised.</div>`);
+    });
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
+    if (msg.type === 'hostile') openHostile();
     if (msg.type === 'audit') openAudit();
     if (msg.type === 'proseCheck') openProseCheck();
     if (msg.type === 'gaps') openGaps();
     if (msg.type === 'consistency') openConsistency();
   });
   window.openConsistency = openConsistency;
+  window.openHostile = openHostile;
   window.openGaps = openGaps;
   window.openAudit = openAudit;
   window.openProseCheck = openProseCheck;

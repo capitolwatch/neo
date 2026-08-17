@@ -359,6 +359,121 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // The argument attacked on its merits. Distinct from the rigor audit, which
+  // asks whether a claim is *supported*; this asks whether the reasoning
+  // *holds* — the thing no amount of provenance can settle, and the thing a
+  // reviewer goes at first when a book argues that one policy caused an outcome.
+  ipcMain.handle('ai:hostileReview', async (_e, bookId, chapterId) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    try {
+      const dir = path.join(libraryDir, bookId);
+      const meta = readJSON(path.join(dir, 'book.json'), null);
+      if (!meta) return { ok: false, error: 'could not read the book' };
+
+      const ids = chapterId ? [chapterId] : (meta.chapterOrder || []);
+      const strip = (h) => String(h).replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+      const text = ids.map((chId) => {
+        let html = '';
+        try { html = fs.readFileSync(path.join(dir, 'chapters', `${chId}.html`), 'utf8'); } catch { return ''; }
+        const t = (meta.chapterTitles && meta.chapterTitles[chId]) || '';
+        return `## ${t}\n${strip(html)}`;
+      }).filter((s) => s.replace(/^## .*/, '').trim()).join('\n\n');
+
+      if (!text.trim()) return { ok: false, error: 'nothing written in that chapter yet' };
+
+      // What evidence exists, so the reviewer attacks the argument rather than
+      // complaining about sourcing the audit already covers.
+      const cards = readJSON(path.join(dir, 'cards.json'), []) || [];
+      const kinds = {};
+      for (const c of cards) {
+        const s = c.sourceId ? readJSON(path.join(libraryDir, 'sources', c.sourceId, 'source.json'), null) : null;
+        if (s && s.confidential) continue;
+        const k = s ? s.family : 'none';
+        kinds[k] = (kinds[k] || 0) + 1;
+      }
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 6000,
+        system: `You are the most demanding reader this chapter will meet: a
+public-finance economist who is unconvinced, reading for the argument's weak
+points. Not an editor — you do not care about prose.
+
+Attack the reasoning:
+- the causal claim, and whether the evidence shown could distinguish cause from
+  coincidence
+- alternative explanations the author has not addressed
+- selection: whether the cases shown were chosen because they fit
+- generalization from a few places to a whole state or era
+- timing: whether the effect precedes the cause anywhere
+- base rates and comparison: what happened in places without the policy
+- whether a stated magnitude could survive its own uncertainty
+
+You have no knowledge of Oklahoma beyond this text, and you must not pretend
+otherwise. Never assert a fact, a figure, a statute or a source of your own —
+not even to illustrate. Attack only what is on the page, and say what evidence
+would answer each objection. If a passage is well argued, say so; a reviewer
+who objects to everything is ignored.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'high',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                challenges: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      force: { type: 'string', description: 'fatal, serious, or minor' },
+                      kind: { type: 'string', description: 'short label, e.g. "alternative explanation"' },
+                      passage: { type: 'string', description: 'the phrase being attacked, quoted from the text' },
+                      objection: { type: 'string' },
+                      answer: { type: 'string', description: 'what evidence or reframing would answer it' }
+                    },
+                    required: ['force', 'kind', 'passage', 'objection', 'answer'],
+                    additionalProperties: false
+                  }
+                },
+                strongest: { type: 'string', description: 'the part of the argument that holds up best' },
+                verdict: { type: 'string' }
+              },
+              required: ['challenges', 'strongest', 'verdict'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{
+          role: 'user',
+          content: `Evidence the author has gathered, by kind: ${JSON.stringify(kinds)}\n\n${text.slice(0, 300000)}`
+        }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : null;
+      if (!parsed) return { ok: false, error: 'nothing came back' };
+
+      const order = ['fatal', 'serious', 'minor'];
+      const challenges = (parsed.challenges || [])
+        .sort((a, b) => order.indexOf(a.force) - order.indexOf(b.force));
+
+      logOutput(libraryDir, 'hostile-review',
+        [parsed.verdict, parsed.strongest, ...challenges.map((c) => c.objection + ' ' + c.answer)].join(' '));
+      return { ok: true, challenges, strongest: parsed.strongest, verdict: parsed.verdict };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'review failed' };
+    }
+  });
+
   // Figures and dates that disagree with themselves across a manuscript. The
   // candidates are extracted mechanically — every number, percentage, year and
   // dollar amount with the sentence around it — so the model is never asked to
