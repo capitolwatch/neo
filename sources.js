@@ -205,6 +205,23 @@ function requestArchive(url) {
 // the same library that will drive reading mode. A plain-text sidecar costs
 // nothing and makes a document searchable and quotable instead of merely stored.
 
+// Word stores an instruction behind every hyperlink, cross-reference and table
+// of contents — HYPERLINK "url" \o "tooltip". Word renders only the result;
+// converters routinely emit the instruction too. Only quoted arguments and
+// \switches are consumed, so the visible text after a field is never eaten,
+// and the keywords are matched case-sensitively so ordinary prose survives.
+const FIELD_NAMED = /\b(?:HYPERLINK|TOC|SEQ|XE|EMBED|INCLUDEPICTURE|AUTOTEXT|FORMTEXT|MACROBUTTON)\b(?:\s+"[^"]*"|\s+\\\*?[a-zA-Z]+)*\s*/g;
+const FIELD_REF = /\b(?:PAGEREF|NOTEREF|STYLEREF|REF)\s+[\w._-]+(?:\s+\\\*?[a-zA-Z]+)*\s*/g;
+const MERGEFORMAT = /\s*\\\*\s*MERGEFORMAT/g;
+
+function stripFieldCodes(s) {
+  return String(s == null ? '' : s)
+    .replace(FIELD_NAMED, '')
+    .replace(FIELD_REF, '')
+    .replace(MERGEFORMAT, '')
+    .replace(/[ \t]{2,}/g, ' ');
+}
+
 async function pdfText(file, maxPages) {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
   const doc = await getDocument({ data: new Uint8Array(fs.readFileSync(file)), useSystemFonts: true }).promise;
@@ -231,11 +248,13 @@ async function extractText(file) {
     if (/\.pdf$/i.test(file)) {
       const { text } = await pdfText(file);
       if (!text.trim()) return null;        // a scan with no text layer — OCR territory
-      fs.writeFileSync(out, text);
+      fs.writeFileSync(out, stripFieldCodes(text));
       return path.basename(out);
     }
     if (process.platform === 'darwin' && /\.(rtf|rtfd|doc|docx|odt|html?|wordml)$/i.test(file)) {
-      return (await textutilText(file, out)) ? path.basename(out) : null;
+      if (!(await textutilText(file, out))) return null;
+      fs.writeFileSync(out, stripFieldCodes(fs.readFileSync(out, 'utf8')));
+      return path.basename(out);
     }
   } catch {
     return null;   // extraction is a convenience; never fail an attach over it
@@ -436,4 +455,7 @@ function registerSources({ ipcMain, dialog, shell, libraryDir, readJSON, writeJS
   });
 }
 
-module.exports = { registerSources, validateSource, blankSource, newVersion, extractText, pdfText, FAMILIES };
+module.exports = {
+  registerSources, validateSource, blankSource, newVersion,
+  extractText, pdfText, stripFieldCodes, FAMILIES
+};

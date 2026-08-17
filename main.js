@@ -363,6 +363,11 @@ async function importFile(fp) {
       .filter((p) => p.text);
   }
 
+  // Strip Word field instructions from every path — they leak through
+  // textutil, some .docx exporters, and most PDF extractions.
+  const { stripFieldCodes } = require('./sources');
+  paras = paras.map((p) => ({ ...p, text: stripFieldCodes(p.text).trim() }));
+
   // Fail loudly. Silently producing an empty book is worse than an error:
   // it looks like the import worked and the document was blank.
   if (!paras.some((p) => p.text && p.text.trim())) {

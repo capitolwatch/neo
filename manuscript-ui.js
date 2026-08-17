@@ -37,6 +37,15 @@
   const ZERO_WIDTH = /[​-‍⁠﻿]/g;   // ZWSP, ZWNJ, ZWJ, word-joiner, BOM
   const ODD_SPACE = /[      　]/g;
 
+  // Word field instructions, which ride along when you copy out of Word:
+  //   HYPERLINK "http://…" \o "tooltip" Novel:   ->   Novel:
+  // Mirrors stripFieldCodes in sources.js. Only quoted arguments and
+  // \switches are consumed, and keywords match case-sensitively, so ordinary
+  // prose — "the hyperlink between poverty and policy" — survives untouched.
+  const FIELD_NAMED = /\b(?:HYPERLINK|TOC|SEQ|XE|EMBED|INCLUDEPICTURE|AUTOTEXT|FORMTEXT|MACROBUTTON)\b(?:\s+"[^"]*"|\s+\\\*?[a-zA-Z]+)*\s*/g;
+  const FIELD_REF = /\b(?:PAGEREF|NOTEREF|STYLEREF|REF)\s+[\w._-]+(?:\s+\\\*?[a-zA-Z]+)*\s*/g;
+  const MERGEFORMAT = /\s*\\\*\s*MERGEFORMAT/g;
+
   let cleaning = false;
 
   function scrub(root) {
@@ -47,7 +56,13 @@
     while (walk.nextNode()) nodes.push(walk.currentNode);
     for (const n of nodes) {
       const before = n.nodeValue;
-      const after = before.replace(ZERO_WIDTH, '').replace(ODD_SPACE, ' ');
+      const after = before
+        .replace(ZERO_WIDTH, '')
+        .replace(ODD_SPACE, ' ')
+        .replace(FIELD_NAMED, '')
+        .replace(FIELD_REF, '')
+        .replace(MERGEFORMAT, '')
+        .replace(/[ \t]{2,}/g, ' ');
       if (after !== before) { n.nodeValue = after; touched = true; }
     }
     return touched;
