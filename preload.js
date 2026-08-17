@@ -66,7 +66,8 @@ contextBridge.exposeInMainWorld('neo', {
     attach: (id, versionId) => ipcRenderer.invoke('sources:attach', id, versionId),
     archive: (url) => ipcRenderer.invoke('sources:archive', url),
     reveal: (id) => ipcRenderer.invoke('sources:reveal', id),
-    usage: () => ipcRenderer.invoke('sources:usage')
+    usage: () => ipcRenderer.invoke('sources:usage'),
+    pages: (id, versionId) => ipcRenderer.invoke('sources:pages', id, versionId)
   },
 
   onMenu: (cb) => ipcRenderer.on('menu', (_e, msg) => cb(msg))

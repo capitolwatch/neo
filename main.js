@@ -333,16 +333,43 @@ async function importFile(fp) {
     const xml = await docFile.async('string');
     paras = [...xml.matchAll(/<w:p[ >][\s\S]*?<\/w:p>/g)].map((m) => {
       const p = m[0];
-      const text = [...p.matchAll(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g)]
+      // <w:t> is a text run; <w:tab> is a tab stop. `<w:t[^>]*>` matches both,
+      // and then captures everything up to the next </w:t> — dragging raw XML
+      // into the manuscript. Require a space or the closing bracket right
+      // after w:t so only real text runs match.
+      const text = [...p.matchAll(/<w:t(?:\s[^>]*)?>([\s\S]*?)<\/w:t>/g)]
         .map((t) => decodeEntities(t[1])).join('');
       const pageBreak = /<w:br [^>]*w:type="page"/.test(p) || /<w:pageBreakBefore/.test(p);
       return { text: text.trim(), pageBreak };
     });
+  } else if (ext === '.rtf' || ext === '.doc' || ext === '.odt' || ext === '.pdf') {
+    // Formats NEO couldn't read before. PDFs and word-processor files go
+    // through the same extractors the source library uses.
+    const tmp = path.join(app.getPath('temp'), `neo-import-${Date.now()}${ext}`);
+    fs.copyFileSync(fp, tmp);
+    const { extractText } = require('./sources');
+    const outName = await extractText(tmp);
+    if (!outName) {
+      throw new Error(`Couldn't read any text out of ${path.basename(fp)}. If it's a scan, it needs OCR first.`);
+    }
+    const raw = fs.readFileSync(path.join(path.dirname(tmp), outName), 'utf8');
+    paras = raw.split(/\r?\n\s*\r?\n/)
+      .map((b) => ({ text: b.replace(/\s*\r?\n\s*/g, ' ').trim(), pageBreak: false }))
+      .filter((p) => p.text);
   } else {
     const raw = fs.readFileSync(fp, 'utf8');
     paras = raw.split(/\r?\n\s*\r?\n/)
       .map((b) => ({ text: b.replace(/\s*\r?\n\s*/g, ' ').trim(), pageBreak: false }))
       .filter((p) => p.text);
+  }
+
+  // Fail loudly. Silently producing an empty book is worse than an error:
+  // it looks like the import worked and the document was blank.
+  if (!paras.some((p) => p.text && p.text.trim())) {
+    throw new Error(
+      `${path.basename(fp)} opened, but no text came out of it. ` +
+      `If it was exported from Pages or another app, try exporting again as .docx or .pdf.`
+    );
   }
 
   // Chapterize: page breaks and "Chapter N"-style headings start new chapters,
@@ -371,7 +398,10 @@ ipcMain.handle('import:pick', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: 'Bring your manuscripts home',
     properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Manuscripts', extensions: ['docx', 'txt', 'md'] }]
+    filters: [
+      { name: 'Manuscripts', extensions: ['docx', 'doc', 'rtf', 'odt', 'pdf', 'txt', 'md'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
   });
   if (canceled || !filePaths.length) return [];
   const out = [];
@@ -599,6 +629,11 @@ function buildMenu() {
     {
       label: 'Research',
       submenu: [
+        {
+          label: 'Read a Source…',
+          accelerator: 'CmdOrCtrl+Shift+D',
+          click: () => sendToWindow({ type: 'readSource' })
+        },
         {
           label: 'Insert Card…',
           accelerator: 'CmdOrCtrl+Shift+K',

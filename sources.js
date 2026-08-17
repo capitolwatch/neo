@@ -374,6 +374,55 @@ function registerSources({ ipcMain, dialog, shell, libraryDir, readJSON, writeJS
     }
   });
 
+  // The document, page by page, for reading mode. Text rather than page
+  // images: a statute is read and quoted, not looked at, and text carries its
+  // page number with it so a captured quote lands with the right locator.
+  ipcMain.handle('sources:pages', async (_e, id, versionId) => {
+    try {
+      const src = readJSON(srcFile(id), null);
+      if (!src) return { ok: false, error: 'source not found' };
+
+      let file = src.file;
+      let offset = Number(src.pageOffset) || 0;
+      if (versionId) {
+        const v = ((src.document && src.document.versions) || []).find((x) => x.id === versionId);
+        if (v && v.file) file = v.file;
+      }
+      if (!file) return { ok: false, error: 'no document attached to this source yet' };
+
+      const full = path.join(srcDir(id), file);
+      if (!fs.existsSync(full)) return { ok: false, error: 'the attached file is missing' };
+
+      if (/\.pdf$/i.test(full)) {
+        const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+        const doc = await getDocument({ data: new Uint8Array(fs.readFileSync(full)), useSystemFonts: true }).promise;
+        const pages = [];
+        for (let i = 1; i <= doc.numPages; i++) {
+          const tc = await (await doc.getPage(i)).getTextContent();
+          pages.push({ page: i, printed: i - offset, text: tc.items.map((it) => it.str).join(' ') });
+        }
+        if (!pages.some((p) => p.text.trim())) {
+          return { ok: false, error: 'this PDF has no text layer — it is a scan, and would need OCR first' };
+        }
+        return { ok: true, pages, title: src.title, paged: true };
+      }
+
+      // Everything else reads as one continuous document; the locator is
+      // structural (a section, an article) rather than a page.
+      let text = '';
+      if (src.textFile && fs.existsSync(path.join(srcDir(id), src.textFile))) {
+        text = fs.readFileSync(path.join(srcDir(id), src.textFile), 'utf8');
+      } else if (/\.(txt|md)$/i.test(full)) {
+        text = fs.readFileSync(full, 'utf8');
+      }
+      if (!text.trim()) return { ok: false, error: 'no readable text in that file' };
+      return { ok: true, pages: [{ page: 1, printed: 1, text }], title: src.title, paged: false };
+    } catch (err) {
+      logError('sources', err);
+      return { ok: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('sources:archive', async (_e, url) => requestArchive(url));
 
   ipcMain.handle('sources:reveal', (_e, id) => {
