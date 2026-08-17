@@ -195,19 +195,47 @@ function requestArchive(url) {
 // Store
 // ---------------------------------------------------------------------------
 
-// Word-processor formats carry their text inside a container NEO can't read.
-// macOS ships textutil, so a plain-text sidecar costs nothing and makes the
-// document searchable and quotable instead of merely stored.
-function extractText(file) {
+// Documents carry their text inside a container NEO can't read. Two extractors:
+// macOS ships textutil for word-processor formats, and PDF.js handles PDFs —
+// the same library that will drive reading mode. A plain-text sidecar costs
+// nothing and makes a document searchable and quotable instead of merely stored.
+
+async function pdfText(file, maxPages) {
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await getDocument({ data: new Uint8Array(fs.readFileSync(file)), useSystemFonts: true }).promise;
+  const last = Math.min(doc.numPages, maxPages || doc.numPages);
+  const pages = [];
+  for (let i = 1; i <= last; i++) {
+    const tc = await (await doc.getPage(i)).getTextContent();
+    pages.push(tc.items.map((it) => it.str).join(' '));
+  }
+  return { text: pages.join('\n\n'), pages: doc.numPages };
+}
+
+function textutilText(file, out) {
   return new Promise((resolve) => {
-    if (process.platform !== 'darwin') return resolve(null);
-    if (!/\.(rtf|rtfd|doc|docx|odt|html?|wordml)$/i.test(file)) return resolve(null);
-    const out = file.replace(/\.[^.]+$/, '') + '.extracted.txt';
     execFile('textutil', ['-convert', 'txt', '-output', out, file], { timeout: 30000 }, (err) => {
-      if (err || !fs.existsSync(out)) return resolve(null);
-      resolve(path.basename(out));
+      resolve(!err && fs.existsSync(out));
     });
   });
+}
+
+async function extractText(file) {
+  const out = file.replace(/\.[^.]+$/, '') + '.extracted.txt';
+  try {
+    if (/\.pdf$/i.test(file)) {
+      const { text } = await pdfText(file);
+      if (!text.trim()) return null;        // a scan with no text layer — OCR territory
+      fs.writeFileSync(out, text);
+      return path.basename(out);
+    }
+    if (process.platform === 'darwin' && /\.(rtf|rtfd|doc|docx|odt|html?|wordml)$/i.test(file)) {
+      return (await textutilText(file, out)) ? path.basename(out) : null;
+    }
+  } catch {
+    return null;   // extraction is a convenience; never fail an attach over it
+  }
+  return null;
 }
 
 function registerSources({ ipcMain, dialog, shell, libraryDir, readJSON, writeJSON, logError }) {
@@ -329,4 +357,4 @@ function registerSources({ ipcMain, dialog, shell, libraryDir, readJSON, writeJS
   });
 }
 
-module.exports = { registerSources, validateSource, blankSource, newVersion, FAMILIES };
+module.exports = { registerSources, validateSource, blankSource, newVersion, extractText, pdfText, FAMILIES };

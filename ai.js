@@ -359,6 +359,101 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // A works-cited list is a set of sources someone already gathered. Parsing it
+  // is restructuring text the author supplied — no lookup, nothing invented.
+  // Entries arrive unverified: a bibliography entry is a *claim* about a work,
+  // typos in them are common, and none of them carries an edition or a copy.
+  ipcMain.handle('ai:importBibliography', async (_e, dialogRef) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    const { dialog } = require('electron');
+    const picked = await dialog.showOpenDialog({
+      title: 'Choose the document whose bibliography you want',
+      properties: ['openFile'],
+      filters: [{ name: 'Documents', extensions: ['pdf', 'rtf', 'doc', 'docx', 'txt', 'md'] }]
+    });
+    if (picked.canceled || !picked.filePaths.length) return { ok: false, error: 'cancelled' };
+
+    try {
+      const src = picked.filePaths[0];
+      let text = '';
+      if (/\.(txt|md)$/i.test(src)) {
+        text = fs.readFileSync(src, 'utf8');
+      } else {
+        const tmp = path.join(app.getPath('temp'), `neo-bib-${Date.now()}${path.extname(src)}`);
+        fs.copyFileSync(src, tmp);
+        const { extractText } = require('./sources');
+        const out = await extractText(tmp);
+        if (out) text = fs.readFileSync(path.join(path.dirname(tmp), out), 'utf8');
+      }
+      if (!text.trim()) {
+        return { ok: false, error: 'no text could be read from that file — if it is a scan, it needs OCR first' };
+      }
+
+      // Bibliographies sit at the end. Take the tail, and cut in at the heading
+      // if we can find one, so the model reads entries rather than the paper.
+      const head = text.search(/\n\s*(works\s+cited|references|bibliography|sources\s+cited)\s*\n/i);
+      const section = head >= 0 ? text.slice(head) : text.slice(-40000);
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 8000,
+        system: `You extract bibliography entries into structured records. You are
+reading text the author supplied. Transcribe only what is on the page — never
+complete a missing publisher, year, or edition from your own knowledge, and
+never correct what looks like an error. Leave a field empty instead. If the
+supplied text contains no bibliography, return an empty list.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'low',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                entries: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      family: { type: 'string', description: 'book, document, dataset, article, or interview' },
+                      title: { type: 'string' },
+                      author: { type: 'string' },
+                      publisher: { type: 'string' },
+                      year: { type: 'string' },
+                      publication: { type: 'string' },
+                      url: { type: 'string' },
+                      raw: { type: 'string', description: 'the entry exactly as printed' }
+                    },
+                    required: ['family', 'title', 'author', 'publisher', 'year', 'publication', 'url', 'raw'],
+                    additionalProperties: false
+                  }
+                }
+              },
+              required: ['entries'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{ role: 'user', content: `Extract every bibliography entry from this text.\n\n${section.slice(0, 120000)}` }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : null;
+      if (!parsed) return { ok: false, error: 'nothing came back' };
+      logOutput(libraryDir, 'bibliography', (parsed.entries || []).map((e) => e.title).join(' '));
+      return { ok: true, entries: parsed.entries || [], file: path.basename(src) };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'import failed' };
+    }
+  });
+
   // Does any phrase the model produced appear in the manuscript? Pure string
   // work — no model, no network, no judgement. A hit means look, not guilty.
   ipcMain.handle('ai:proseCheck', (_e, bookId, n) => {

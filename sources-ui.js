@@ -394,8 +394,70 @@
     host.innerHTML = bits.join('');
   }
 
+  // Turn somebody's works-cited list into source records. They arrive
+  // unverified and uncitable, which is correct — a bibliography entry is a
+  // claim about a work, not the work.
+  async function importBibliography() {
+    const res = await neo.ai.importBibliography();
+    if (!res.ok) { alert(res.error === 'cancelled' ? '' : res.error); return; }
+    if (!res.entries.length) { alert('No bibliography entries found in that file.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.style.zIndex = '960';
+    bd.innerHTML = `<div class="modal" style="width:min(720px,94vw);max-height:84vh;display:flex;flex-direction:column">
+        <h2 style="font-size:16px;margin:0 0 4px">${res.entries.length} entries from ${esc(res.file)}</h2>
+        <p style="font-size:12px;color:#888;margin:0 0 12px">Untick anything you don't want. They come in
+          unverified and uncitable — no edition, no pinned copy — so each becomes a research to-do rather
+          than a finished source.</p>
+        <div id="bib-list" style="flex:1;overflow:auto"></div>
+        <div style="display:flex;justify-content:space-between;margin-top:14px">
+          <button id="bib-go" style="background:var(--accent);border:none;border-radius:6px;padding:7px 16px;color:#191919">Add the ticked ones</button>
+          <button id="bib-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 16px;color:#888">Cancel</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+
+    bd.querySelector('#bib-list').innerHTML = res.entries.map((e, i) => `
+      <label style="display:flex;gap:9px;padding:8px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer">
+        <input type="checkbox" data-i="${i}" checked style="margin-top:3px"/>
+        <span style="min-width:0">
+          <span style="font-size:12px;color:#ddd">${esc(e.title) || '<em style="color:#666">untitled</em>'}</span>
+          <span style="display:block;font-size:11px;color:#777;margin-top:2px">${esc(e.author)}${e.year ? ' · ' + esc(e.year) : ''}${e.publisher ? ' · ' + esc(e.publisher) : ''} <span style="color:#5f6f66">[${esc(e.family)}]</span></span>
+        </span>
+      </label>`).join('');
+
+    const shut = () => bd.remove();
+    bd.querySelector('#bib-x').addEventListener('click', shut);
+    bd.querySelector('#bib-go').addEventListener('click', async () => {
+      const picks = [...bd.querySelectorAll('input:checked')].map((c) => res.entries[Number(c.dataset.i)]);
+      let added = 0;
+      for (const e of picks) {
+        const fam = ['book', 'document', 'dataset', 'article', 'interview'].includes(e.family) ? e.family : 'book';
+        const s = await neo.sources.blank(fam);
+        s.title = e.title; s.author = e.author;
+        s.metadataSource = 'bibliography';
+        s.notes = `Imported from the works cited of ${res.file} on ${new Date().toISOString().slice(0, 10)}.\nUNVERIFIED — entry as printed:\n${e.raw}`;
+        const f = s[fam];
+        if ('publisher' in f) f.publisher = e.publisher || '';
+        if ('year' in f) f.year = e.year || '';
+        if ('publication' in f) f.publication = e.publication || '';
+        if ('url' in f) f.url = e.url || '';
+        const out = await neo.sources.save(s);
+        if (out.ok) added++;
+      }
+      shut();
+      alert(`${added} source${added === 1 ? '' : 's'} added, all unverified.`);
+      renderList();
+    });
+  }
+
   // Its own menu listener — app.js is left untouched.
-  neo.onMenu((msg) => { if (msg && msg.type === 'sources') openSources(); });
+  neo.onMenu((msg) => {
+    if (!msg) return;
+    if (msg.type === 'sources') openSources();
+    if (msg.type === 'importBib') importBibliography();
+  });
 
   window.openSources = openSources;
 })();

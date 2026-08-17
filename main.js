@@ -595,6 +595,10 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'board' })
         },
         {
+          label: 'Import Bibliography…',
+          click: () => sendToWindow({ type: 'importBib' })
+        },
+        {
           label: 'Sources…',
           accelerator: 'CmdOrCtrl+Shift+R',   // ⌘⇧S is the Silo
           click: () => sendToWindow({ type: 'sources' })
