@@ -135,14 +135,21 @@
       const rows = await Promise.all(all.map(async (s) => {
         const { citationBlockers } = await neo.sources.validate(s);
         const flag = citationBlockers.length
-          ? `<span title="${esc(citationBlockers.join(' · '))}" style="color:#c98b6b;font-size:11px">⚠ ${citationBlockers.length} to fix before citing</span>`
-          : `<span style="color:#6b9c86;font-size:11px">✓ citable</span>`;
-        return `<div class="src-row" data-id="${esc(s.id)}" style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;padding:9px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer">
-            <div style="min-width:0">
-              <div style="font-size:14px">${esc(s.title) || '<em style="color:#666">untitled</em>'}</div>
-              <div style="font-size:11px;color:#777">${esc(FAMILY_LABEL[s.family] || s.family)}${s.author ? ' · ' + esc(s.author) : ''}</div>
+          ? `<span style="color:#c98b6b;font-size:11px;white-space:nowrap">⚠ ${citationBlockers.length} to fix</span>`
+          : `<span style="color:#6b9c86;font-size:11px;white-space:nowrap">✓ citable</span>`;
+        // Spelled out, not hidden in a tooltip — this is the thing you act on.
+        const why = citationBlockers.length
+          ? `<div style="font-size:11px;color:#8a7a5a;margin-top:4px;line-height:1.5">${citationBlockers.map((b) => '· ' + esc(b)).join('<br>')}</div>`
+          : '';
+        return `<div class="src-row" data-id="${esc(s.id)}" style="padding:10px 4px;border-bottom:1px solid #2a2a2a;cursor:pointer">
+            <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline">
+              <div style="min-width:0">
+                <div style="font-size:14px">${esc(s.title) || '<em style="color:#666">untitled</em>'}</div>
+                <div style="font-size:11px;color:#777">${esc(FAMILY_LABEL[s.family] || s.family)}${s.author ? ' · ' + esc(s.author) : ''}</div>
+              </div>
+              ${flag}
             </div>
-            <div style="white-space:nowrap">${flag}</div>
+            ${why}
           </div>`;
       }));
       body().innerHTML = rows.join('');
@@ -246,6 +253,14 @@
       <button id="src-del" style="background:none;border:none;color:#7a4b42;font-size:12px">Delete</button>`;
     actions().querySelector('#src-back').addEventListener('click', renderList);
     actions().querySelector('#src-save').addEventListener('click', save);
+
+    // Say what's outstanding the moment the form opens, rather than making the
+    // author press Save to find out.
+    neo.sources.validate(editing).then((check) => {
+      if (check.errors.length || check.citationBlockers.length) {
+        showProblems(check.errors, check.citationBlockers);
+      }
+    });
     actions().querySelector('#src-del').addEventListener('click', async () => {
       if (!confirm('Move this source to the Trash?')) return;
       await neo.sources.remove(editing.id);
