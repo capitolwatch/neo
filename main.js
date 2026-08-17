@@ -631,7 +631,7 @@ function buildMenu() {
       submenu: [
         {
           label: 'Read a Source…',
-          accelerator: 'CmdOrCtrl+Shift+D',
+          accelerator: 'CmdOrCtrl+Shift+O',   // Shift+D is Darlings
           click: () => sendToWindow({ type: 'readSource' })
         },
         {
