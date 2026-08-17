@@ -359,6 +359,85 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // Line editing on a passage the author selected. Suggestions only — they
+  // land in a panel, never in the page, and the author retypes what she agrees
+  // with. That friction is the whole guarantee that the prose stays hers.
+  ipcMain.handle('ai:lineEdit', async (_e, passage) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+    const text = String(passage || '').trim();
+    if (text.length < 40) return { ok: false, error: 'select a longer passage — a sentence or two at least' };
+    if (text.length > 12000) return { ok: false, error: 'that is too much at once; try a few paragraphs' };
+
+    try {
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 4000,
+        system: `You are a line editor for a journalist writing narrative
+nonfiction about tax policy. She trained in AP style; the book is in Chicago.
+
+Work at the level of the sentence. Look for: passive constructions hiding who
+acted, abstraction where a concrete noun would land harder, hedges that weaken
+a claim she has evidence for, throat-clearing before the point, repeated
+sentence rhythms, jargon a general reader would stumble on, and words doing no
+work.
+
+For each observation, quote the phrase, say what is wrong, and — where a
+rewrite would be clearer than a description — show one. Your rewrite is an
+illustration for her to react to, not a replacement; she will retype whatever
+she keeps in her own words.
+
+Never restructure her argument, never change what a sentence claims, and never
+add a fact, figure or attribution. If a passage is already good, say so and
+move on rather than manufacturing notes.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'medium',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                notes: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      phrase: { type: 'string', description: 'quoted from her text' },
+                      issue: { type: 'string', description: 'short label' },
+                      why: { type: 'string' },
+                      tryThis: { type: 'string', description: 'an illustrative rewrite, or empty' }
+                    },
+                    required: ['phrase', 'issue', 'why', 'tryThis'],
+                    additionalProperties: false
+                  }
+                },
+                working: { type: 'string', description: 'what is already working in this passage' }
+              },
+              required: ['notes', 'working'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{ role: 'user', content: text }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : null;
+      if (!parsed) return { ok: false, error: 'nothing came back' };
+      logOutput(libraryDir, 'line-edit',
+        [parsed.working, ...(parsed.notes || []).map((n) => n.why + ' ' + n.tryThis)].join(' '));
+      return { ok: true, notes: parsed.notes || [], working: parsed.working };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'line edit failed' };
+    }
+  });
+
   // The argument attacked on its merits. Distinct from the rigor audit, which
   // asks whether a claim is *supported*; this asks whether the reasoning
   // *holds* — the thing no amount of provenance can settle, and the thing a

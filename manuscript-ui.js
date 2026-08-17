@@ -326,11 +326,65 @@
     if (typeof openBook === 'function') openBook(bk.id);   // re-render with the new structure
   }
 
+  // -------------------------------------------------------------------------
+  // Line editing
+  //
+  // Suggestions land here and nowhere else. There is no button that applies
+  // one — you read it, and if you agree you retype it in your own words. That
+  // ten seconds of friction is the entire guarantee that the prose is yours,
+  // and it is enforced by the absence of a code path, not by a promise.
+  // -------------------------------------------------------------------------
+
+  async function lineEdit() {
+    const sel = window.getSelection();
+    const text = sel ? String(sel).trim() : '';
+    if (!text) { alert('Select the passage you want looked at first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(760px,94vw);max-height:86vh;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <h2 style="font-size:16px;margin:0">Line notes</h2>
+          <span style="font-size:11px;color:#777">${text.split(/\s+/).length} words selected</span>
+        </div>
+        <div id="le-body" style="flex:1;overflow:auto;margin:14px 0;font-size:13px;color:#999;line-height:1.65">Reading…</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px">
+          <span style="font-size:11px;color:#666">Nothing here can be applied — retype what you agree with.</span>
+          <button id="le-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 16px;color:#888">Close</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#le-x').addEventListener('click', shut);
+
+    const out = await neo.ai.lineEdit(text);
+    const host = bd.querySelector('#le-body');
+    if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+
+    host.innerHTML =
+      (out.working ? `<div style="border-left:3px solid #4f7a5f;background:#16231b;padding:10px 13px;margin-bottom:14px">
+          <div style="font-size:10px;color:#7fae8c;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Already working</div>
+          <div style="font-size:12px;color:#c3d6c8">${esc(out.working)}</div>
+        </div>` : '') +
+      (out.notes.length ? out.notes.map((n) => `
+        <div style="border:1px solid #2c2c2c;border-radius:7px;padding:11px 13px;margin-bottom:9px">
+          <div style="font-size:10px;color:#777;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${esc(n.issue)}</div>
+          <div style="font-size:12px;color:#c6cfd3;font-style:italic;margin-bottom:6px">“${esc(n.phrase)}”</div>
+          <div style="font-size:12px;color:#aaa;line-height:1.55">${esc(n.why)}</div>
+          ${n.tryThis ? `<div style="margin-top:8px;padding:8px 11px;background:#1e1e1e;border-left:2px solid #4d6b7a;font-size:12px;color:#9fc0cf">${esc(n.tryThis)}</div>` : ''}
+        </div>`).join('') : `<div style="color:#6b9c86">Nothing to flag in this passage.</div>`);
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
     if (msg.type === 'insertCard') openPalette();
     if (msg.type === 'findStructure') findStructure();
+    if (msg.type === 'lineEdit') lineEdit();
   });
+  window.lineEdit = lineEdit;
   window.openCardPalette = openPalette;
   window.findStructure = findStructure;
 })();

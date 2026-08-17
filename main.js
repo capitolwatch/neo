@@ -734,6 +734,11 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'dossier' })
         },
         {
+          label: 'Line Notes on the Selection…',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: () => sendToWindow({ type: 'lineEdit' })
+        },
+        {
           label: 'The Unconvinced Reader…',
           click: () => sendToWindow({ type: 'hostile' })
         },
