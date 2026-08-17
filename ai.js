@@ -359,6 +359,97 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // Read a book's title and copyright pages. This is the grounded opposite of
+  // asking a model what edition a book is: the answer comes off a photograph of
+  // the actual page in the author's hands, which is the only place an edition
+  // statement is authoritative. Catalogues get editions wrong routinely.
+  ipcMain.handle('ai:copyrightPage', async () => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    const { dialog } = require('electron');
+    const picked = await dialog.showOpenDialog({
+      title: 'Photograph or scan of the title and copyright pages',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Images and PDFs', extensions: ['jpg', 'jpeg', 'png', 'webp', 'heic', 'pdf'] }]
+    });
+    if (picked.canceled || !picked.filePaths.length) return { ok: false, error: 'cancelled' };
+
+    try {
+      const content = [];
+      for (const fp of picked.filePaths.slice(0, 4)) {
+        const ext = path.extname(fp).toLowerCase();
+        const data = fs.readFileSync(fp).toString('base64');
+        if (ext === '.pdf') {
+          content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data } });
+        } else {
+          const media = ext === '.png' ? 'image/png'
+            : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+          content.push({ type: 'image', source: { type: 'base64', media_type: media, data } });
+        }
+      }
+      content.push({
+        type: 'text',
+        text: 'Read the bibliographic details off these pages. Transcribe only what is printed.'
+      });
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 2000,
+        system: `You transcribe what is printed on a book's title and copyright
+pages. You are reading an image the author supplied of a book they are holding.
+
+Report only what is legibly printed. Never complete a field from your own
+knowledge of the book, never correct an apparent error, and never infer an
+edition from a copyright year. If something is illegible or absent, leave it
+empty and say so in "unreadable".
+
+The printing line — a row like "10 9 8 7 6 5 4 3 2 1" — gives the printing
+number as its lowest digit. Transcribe the line as printed and state the number
+you read from it, but only if the line is actually visible.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'low',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                title: { type: 'string' },
+                subtitle: { type: 'string' },
+                author: { type: 'string' },
+                publisher: { type: 'string' },
+                place: { type: 'string', description: 'city of publication as printed' },
+                year: { type: 'string', description: 'copyright or publication year as printed' },
+                edition: { type: 'string', description: 'edition statement exactly as printed, or empty' },
+                printing: { type: 'string', description: 'the printing line as printed, or empty' },
+                isbn: { type: 'string' },
+                unreadable: { type: 'string', description: 'what you could not make out, or empty' }
+              },
+              required: ['title', 'subtitle', 'author', 'publisher', 'place', 'year',
+                'edition', 'printing', 'isbn', 'unreadable'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{ role: 'user', content }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const fields = block ? JSON.parse(block.text) : null;
+      if (!fields) return { ok: false, error: 'nothing came back' };
+      logOutput(libraryDir, 'copyright-page', Object.values(fields).filter((v) => typeof v === 'string').join(' '));
+      return { ok: true, fields, files: picked.filePaths.map((f) => path.basename(f)) };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'could not read those pages' };
+    }
+  });
+
   // What the board is missing. The structural half is counted, not guessed —
   // how many sources hold up a theme is arithmetic, and a model has no business
   // being asked. The model is used only for the conceptual half: which argument

@@ -26,7 +26,8 @@
       ['publisher', 'Publisher'],
       ['place', 'Place of publication', 'Chicago wants the city — e.g. Norman, or Norman, OK'],
       ['year', 'Year'],
-      ['edition', 'Edition / printing', 'Page numbers are unverifiable without this'],
+      ['edition', 'Edition', 'Page numbers are unverifiable without this'],
+      ['printing', 'Printing line', 'e.g. 10 9 8 7 6 5 4 3 2 1 — the lowest digit is the printing'],
       ['isbn', 'ISBN']
     ],
     document: [
@@ -245,6 +246,7 @@
       <div style="display:flex;gap:7px;margin-bottom:12px">
         <input id="src-lookup" type="text" placeholder="Title, ISBN, or citation — fill it in for me" style="flex:1"/>
         <button id="src-lookup-go" style="background:none;border:1px solid #3a4a52;border-radius:6px;padding:6px 13px;color:#9fc0cf;font-size:12px;white-space:nowrap">Look up</button>
+        ${editing.family === 'book' ? `<button id="src-copyright" title="Read a photo of the title and copyright pages" style="background:none;border:1px solid #3a4a52;border-radius:6px;padding:6px 13px;color:#9fc0cf;font-size:12px;white-space:nowrap">Read the copyright page</button>` : ''}
       </div>
       <div id="src-lookup-out" style="margin-bottom:10px"></div>
       ${field('title', 'Title', '', 'text', editing.title)}
@@ -291,6 +293,8 @@
     });
 
     backdrop.querySelector('#src-lookup-go').addEventListener('click', lookup);
+    const cp = backdrop.querySelector('#src-copyright');
+    if (cp) cp.addEventListener('click', readCopyrightPage);
     backdrop.querySelector('#src-lookup').addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); lookup(); }
     });
@@ -450,6 +454,38 @@
         <div style="font-size:11px;color:#9fc0cf">Filled from <b>${esc(f.source || 'unknown')}</b>. Empty fields were left empty rather than guessed.</div>
         ${f.caution ? `<div style="font-size:11px;color:#c9a96b;margin-top:4px">Check first: ${esc(f.caution)}</div>` : ''}
         ${(res.candidates || []).length > 1 ? `<div style="font-size:11px;color:#777;margin-top:4px">${res.candidates.length} catalogue matches — if this is the wrong printing, search by ISBN.</div>` : ''}
+      </div>`;
+  }
+
+  // The authoritative place for an edition statement is the copyright page of
+  // the copy in your hands — not a catalogue, and certainly not a model's
+  // memory. This reads a photograph of it and proposes what it saw.
+  async function readCopyrightPage() {
+    const out = backdrop.querySelector('#src-lookup-out');
+    out.innerHTML = `<div style="font-size:12px;color:#777">Reading the page…</div>`;
+
+    harvest();
+    const res = await neo.ai.copyrightPage();
+    if (!res.ok) {
+      out.innerHTML = res.error === 'cancelled' ? '' : `<div style="font-size:12px;color:#c98b6b">${esc(res.error)}</div>`;
+      return;
+    }
+
+    const f = res.fields;
+    const put = (obj, key, val) => { if (val && !String(obj[key] || '').trim()) obj[key] = val; };
+    put(editing, 'title', f.title);
+    put(editing, 'author', f.author);
+    ['publisher', 'place', 'year', 'edition', 'printing', 'isbn'].forEach((k) => {
+      if (k in editing.book) put(editing.book, k, f[k]);
+    });
+    editing.metadataSource = 'copyright page';
+
+    renderForm(editing);
+    backdrop.querySelector('#src-lookup-out').innerHTML = `
+      <div style="border-left:3px solid #4d6b7a;background:#1b2429;padding:9px 12px">
+        <div style="font-size:11px;color:#9fc0cf">Read from ${esc(res.files.join(', '))}. Only what was legible on the page — nothing filled in from elsewhere.</div>
+        ${f.printing ? `<div style="font-size:11px;color:#8fa89b;margin-top:4px">Printing line as printed: ${esc(f.printing)}</div>` : ''}
+        ${f.unreadable ? `<div style="font-size:11px;color:#c9a96b;margin-top:4px">Couldn't make out: ${esc(f.unreadable)}</div>` : ''}
       </div>`;
   }
 
