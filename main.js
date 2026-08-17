@@ -775,6 +775,8 @@ function checkForUpdates() {
 // Research lives in its own modules — see sources.js for why.
 require('./cards').registerCards({ ipcMain, libraryDir: LIBRARY_DIR, readJSON, writeJSON, logError });
 
+require('./citations').registerCitations({ ipcMain, libraryDir: LIBRARY_DIR, readJSON, logError });
+
 require('./ai').registerAI({
   ipcMain,
   app,

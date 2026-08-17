@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld('neo', {
     structure: (bookId) => ipcRenderer.invoke('ai:structure', bookId)
   },
 
+  citations: {
+    build: (bookId) => ipcRenderer.invoke('citations:build', bookId),
+    save: (bookId, html) => ipcRenderer.invoke('citations:save', bookId, html)
+  },
+
   board: {
     read: (bookId) => ipcRenderer.invoke('board:read', bookId),
     write: (bookId, board) => ipcRenderer.invoke('board:write', bookId, board),
