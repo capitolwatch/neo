@@ -49,7 +49,12 @@ contextBridge.exposeInMainWorld('neo', {
     importBibliography: () => ipcRenderer.invoke('ai:importBibliography'),
     structure: (bookId) => ipcRenderer.invoke('ai:structure', bookId),
     gaps: (bookId) => ipcRenderer.invoke('ai:gaps', bookId),
-    copyrightPage: () => ipcRenderer.invoke('ai:copyrightPage')
+    copyrightPage: () => ipcRenderer.invoke('ai:copyrightPage'),
+    consistency: (bookId) => ipcRenderer.invoke('ai:consistency', bookId)
+  },
+
+  submission: {
+    export: (bookId) => ipcRenderer.invoke('submission:export', bookId)
   },
 
   citations: {

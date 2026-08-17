@@ -186,8 +186,23 @@
     });
   }
 
+  async function exportSubmission() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+    const out = await neo.submission.export(bk.id);
+    if (!out.ok) { if (out.error !== 'cancelled') alert(out.error); return; }
+    alert(
+      `Exported.\n\n` +
+      `${out.words.toLocaleString()} words · ${out.notes} note${out.notes === 1 ? '' : 's'} · ` +
+      `${out.works} bibliography entr${out.works === 1 ? 'y' : 'ies'}\n\n` +
+      `Double-spaced Times New Roman, running header, notes as real Word endnotes.` +
+      (out.gaps.length ? `\n\nStill printing as gaps: ${out.gaps.join(', ')}` : '')
+    );
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
+    if (msg.type === 'submission') exportSubmission();
     if (msg.type === 'citations') open();
     if (msg.type === 'dossier') openDossier();
   });

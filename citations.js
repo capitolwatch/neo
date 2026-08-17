@@ -371,4 +371,57 @@ function registerCitations({ ipcMain, libraryDir, readJSON, logError }) {
   });
 }
 
-module.exports = { registerCitations, noteFor, shortNote, bibFor, invertName, longDate };
+// Shared with the submission export, which needs the same notes in the same
+// order so the numbers in the text match the notes at the back.
+function buildNotesFor({ libraryDir, readJSON, bookId, meta }) {
+  const dir = path.join(libraryDir, bookId);
+  const cards = readJSON(path.join(dir, 'cards.json'), []) || [];
+  const cardById = new Map(cards.map((c) => [c.id, c]));
+  const cache = new Map();
+  const readSource = (id) => {
+    if (!id) return null;
+    if (!cache.has(id)) cache.set(id, readJSON(path.join(libraryDir, 'sources', id, 'source.json'), null));
+    return cache.get(id);
+  };
+
+  const notes = [];
+  const used = new Map();
+  const seen = new Map();
+  const plain = (s) => String(s).replace(/<[^>]+>/g, '');
+
+  for (const chId of (meta.chapterOrder || [])) {
+    let html = '';
+    try { html = fs.readFileSync(path.join(dir, 'chapters', `${chId}.html`), 'utf8'); } catch { continue; }
+    for (const m of html.matchAll(/<span[^>]*class="[^"]*neo-cite[^"]*"[^>]*>([\s\S]*?)<\/span>/gi)) {
+      const tag = m[0];
+      const attr = (n) => {
+        const a = new RegExp(`data-${n}="([^"]*)"`).exec(tag);
+        return a ? a[1] : '';
+      };
+      const card = cardById.get(attr('card')) || null;
+      const src = readSource(attr('source') || (card && card.sourceId));
+      if (!src) continue;
+      src.__versionId = attr('version') || (card && card.versionId) || '';
+      used.set(src.id, src);
+      const loc = attr('locator') || (card && card.locator) || '';
+      const first = !seen.has(src.id);
+      if (first) seen.set(src.id, true);
+      const text = first ? noteFor(src, loc) : shortNote(src, loc);
+      notes.push({ text, plain: plain(text) });
+    }
+  }
+
+  const legal = [];
+  const works = [];
+  for (const src of used.values()) (src.family === 'document' ? legal : works).push(plain(bibFor(src)));
+  const key = (s) => s.replace(/^[“"']/, '').toLowerCase();
+  works.sort((a, b) => key(a).localeCompare(key(b)));
+  legal.sort((a, b) => key(a).localeCompare(key(b)));
+
+  const gaps = [...new Set((notes.map((n) => n.plain).join(' ') + works.join(' ') + legal.join(' '))
+    .match(/\[[a-z ]+ missing\]/g) || [])];
+
+  return { notes, works, legal, gaps };
+}
+
+module.exports = { registerCitations, buildNotesFor, noteFor, shortNote, bibFor, invertName, longDate };

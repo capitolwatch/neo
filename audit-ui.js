@@ -228,12 +228,64 @@
       (out.note ? `<div style="font-size:11px;color:#777;margin-top:16px">${esc(out.note)}</div>` : '');
   }
 
+  // -------------------------------------------------------------------------
+  // Figures that disagree with themselves
+  // -------------------------------------------------------------------------
+
+  async function openConsistency() {
+    const bk = currentBook();
+    if (!bk) { alert('Open a book first.'); return; }
+
+    const bd = document.createElement('div');
+    bd.className = 'modal-backdrop';
+    bd.innerHTML = `<div class="modal" style="width:min(760px,94vw);max-height:86vh;display:flex;flex-direction:column">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <h2 style="font-size:16px;margin:0">Figures that disagree</h2>
+          <span id="kx-meta" style="font-size:12px;color:#777"></span>
+        </div>
+        <div id="kx-body" style="flex:1;overflow:auto;margin:14px 0;font-size:13px;color:#999;line-height:1.65">Reading every figure in the manuscript…</div>
+        <div style="text-align:right"><button id="kx-x" style="background:none;border:1px solid #3a3a3a;border-radius:6px;padding:7px 18px;color:#888">Close</button></div>
+      </div>`;
+    document.body.appendChild(bd);
+    const shut = () => { document.removeEventListener('keydown', k, true); bd.remove(); };
+    const k = (e) => { if (e.key === 'Escape') shut(); };
+    document.addEventListener('keydown', k, true);
+    bd.addEventListener('mousedown', (e) => { if (e.target === bd) shut(); });
+    bd.querySelector('#kx-x').addEventListener('click', shut);
+
+    const out = await neo.ai.consistency(bk.id);
+    const host = bd.querySelector('#kx-body');
+    if (!out.ok) { host.innerHTML = `<span style="color:#c98b6b">${esc(out.error)}</span>`; return; }
+
+    bd.querySelector('#kx-meta').textContent = `${out.counted} figure${out.counted === 1 ? '' : 's'} compared`;
+
+    if (!out.findings.length) {
+      host.innerHTML = `<div style="color:#6b9c86">No two figures appear to describe the same quantity differently.</div>
+        <div style="color:#777;font-size:12px;margin-top:8px">${esc(out.note || out.verdict || '')}</div>
+        <div style="color:#777;font-size:12px;margin-top:8px">This compares your numbers against each other. It cannot tell you whether any of them is right.</div>`;
+      return;
+    }
+
+    host.innerHTML =
+      (out.verdict ? `<div style="color:#bbb;margin-bottom:14px">${esc(out.verdict)}</div>` : '') +
+      out.findings.map((f) => `
+        <div style="border-left:3px solid #a05548;background:#2a1d1a;padding:11px 14px;margin-bottom:10px">
+          <div style="font-size:10px;color:#c98b6b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">${esc(f.quantity)}</div>
+          <div style="font-size:12px;color:#ddc4bd;margin-bottom:5px">“${esc(f.a)}”</div>
+          <div style="font-size:12px;color:#ddc4bd;margin-bottom:6px">“${esc(f.b)}”</div>
+          <div style="font-size:12px;color:#aa9791">${esc(f.why)}</div>
+        </div>`).join('') +
+      `<div style="color:#777;font-size:12px;margin-top:10px">Which figure is right is yours to determine — this only shows that two of them disagree.</div>`;
+  }
+
   neo.onMenu((msg) => {
     if (!msg) return;
     if (msg.type === 'audit') openAudit();
     if (msg.type === 'proseCheck') openProseCheck();
     if (msg.type === 'gaps') openGaps();
+    if (msg.type === 'consistency') openConsistency();
   });
+  window.openConsistency = openConsistency;
   window.openGaps = openGaps;
   window.openAudit = openAudit;
   window.openProseCheck = openProseCheck;

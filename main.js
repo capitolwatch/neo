@@ -726,8 +726,16 @@ function buildMenu() {
           click: () => sendToWindow({ type: 'proseCheck' })
         },
         {
+          label: 'Export for Submission…',
+          click: () => sendToWindow({ type: 'submission' })
+        },
+        {
           label: 'Fact-Check Dossier…',
           click: () => sendToWindow({ type: 'dossier' })
+        },
+        {
+          label: 'Figures That Disagree…',
+          click: () => sendToWindow({ type: 'consistency' })
         },
         {
           label: "What's Missing…",
@@ -845,6 +853,8 @@ function checkForUpdates() {
 
 // Research lives in its own modules — see sources.js for why.
 require('./cards').registerCards({ ipcMain, libraryDir: LIBRARY_DIR, readJSON, writeJSON, logError });
+
+require('./submission').registerSubmission({ ipcMain, dialog, libraryDir: LIBRARY_DIR, readJSON, logError });
 
 require('./citations').registerCitations({ ipcMain, libraryDir: LIBRARY_DIR, readJSON, logError });
 

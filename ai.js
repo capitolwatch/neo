@@ -359,6 +359,102 @@ it, leave it empty rather than inferring it.`,
     }
   });
 
+  // Figures and dates that disagree with themselves across a manuscript. The
+  // candidates are extracted mechanically — every number, percentage, year and
+  // dollar amount with the sentence around it — so the model is never asked to
+  // find numbers, only to judge whether two of the author's own numbers are
+  // meant to be the same one.
+  ipcMain.handle('ai:consistency', async (_e, bookId) => {
+    const key = readKey();
+    if (!key) return { ok: false, error: 'no API key set' };
+
+    try {
+      const dir = path.join(libraryDir, bookId);
+      const meta = readJSON(path.join(dir, 'book.json'), null);
+      if (!meta) return { ok: false, error: 'could not read the book' };
+
+      // Pull every figure with enough context to tell what it refers to.
+      const FIGURE = /(?:\$\s?[\d,]+(?:\.\d+)?(?:\s?(?:million|billion|thousand))?|[\d,]+(?:\.\d+)?\s?(?:percent|%)|\b(?:1[6-9]|20)\d{2}\b|\b[\d,]{2,}(?:\.\d+)?\b)/g;
+      const found = [];
+      for (const chId of (meta.chapterOrder || [])) {
+        let html = '';
+        try { html = fs.readFileSync(path.join(dir, 'chapters', `${chId}.html`), 'utf8'); } catch { continue; }
+        const title = (meta.chapterTitles && meta.chapterTitles[chId]) || '';
+        const text = html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+        for (const sent of text.split(/(?<=[.!?])\s+/)) {
+          const hits = sent.match(FIGURE);
+          if (!hits) continue;
+          for (const h of new Set(hits)) {
+            found.push({ chapter: title || chId, figure: h.trim(), sentence: sent.slice(0, 260) });
+          }
+        }
+      }
+
+      if (found.length < 2) {
+        return { ok: true, findings: [], counted: found.length, note: 'too few figures in the manuscript to compare' };
+      }
+
+      const Anthropic = require('@anthropic-ai/sdk');
+      const client = new Anthropic({ apiKey: key });
+
+      const res = await client.messages.create({
+        model: MODEL,
+        max_tokens: 4000,
+        system: `You are given every figure in a manuscript with the sentence
+around it, already extracted. Your only job is to spot figures that appear to
+describe the SAME quantity but disagree.
+
+Report a conflict only when the surrounding sentences make it clear the two
+figures refer to the same thing. Different counties, different years, different
+measures and different populations are not conflicts, and reporting them as
+such wastes the author's time and trains them to ignore you.
+
+You cannot know which figure is correct — say which passages disagree and let
+the author check. Never assert a value of your own, never compute a correction,
+and never introduce a figure that is not in the material given.`,
+        thinking: { type: 'adaptive' },
+        output_config: {
+          effort: 'medium',
+          format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: {
+                findings: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      quantity: { type: 'string', description: 'what both figures appear to describe' },
+                      a: { type: 'string', description: 'the first passage, quoted' },
+                      b: { type: 'string', description: 'the second passage, quoted' },
+                      why: { type: 'string', description: 'why these look like the same quantity' }
+                    },
+                    required: ['quantity', 'a', 'b', 'why'],
+                    additionalProperties: false
+                  }
+                },
+                verdict: { type: 'string' }
+              },
+              required: ['findings', 'verdict'],
+              additionalProperties: false
+            }
+          }
+        },
+        messages: [{ role: 'user', content: `Figures extracted from the manuscript:\n${JSON.stringify(found.slice(0, 600), null, 1)}` }]
+      });
+
+      if (res.stop_reason === 'refusal') return { ok: false, error: 'the request was declined' };
+      const block = res.content.find((b) => b.type === 'text');
+      const parsed = block ? JSON.parse(block.text) : { findings: [], verdict: '' };
+      logOutput(libraryDir, 'consistency', [parsed.verdict, ...(parsed.findings || []).map((f) => f.why)].join(' '));
+      return { ok: true, findings: parsed.findings || [], verdict: parsed.verdict, counted: found.length };
+    } catch (err) {
+      logError('ai', err);
+      return { ok: false, error: err.message || 'consistency check failed' };
+    }
+  });
+
   // Read a book's title and copyright pages. This is the grounded opposite of
   // asking a model what edition a book is: the answer comes off a photograph of
   // the actual page in the author's hands, which is the only place an edition
